@@ -1,0 +1,12 @@
+.ipynb_checkpoints
+*/.ipynb_checkpoints/*
+*__pycache__/
+*.vscode/
+*.venv/
+/report
+*.pdf
+*.pptx
+*.pptx.txt
+*.png
+data/
+output/*.csv
