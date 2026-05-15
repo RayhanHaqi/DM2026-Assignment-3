@@ -9,4 +9,4 @@
 *.pptx.txt
 *.png
 data/
-output/*.csv
+output/
