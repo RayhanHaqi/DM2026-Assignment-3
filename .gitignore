@@ -10,3 +10,6 @@
 *.png
 data/
 output/
+build/
+*.egg-info/
+*.nbconvert.ipynb
