@@ -47,9 +47,17 @@ class InstallWithData(install):
 
         # Run download in subprocess after fixing kagglehub dependencies
         download_script = (
-            "import subprocess, sys; "
+            "import subprocess, sys, os, json; "
             "subprocess.run([sys.executable, '-m', 'pip', 'uninstall', '-y', 'kagglehub', 'kagglesdk'], capture_output=True); "
             "subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'kagglehub', '-q']); "
+            "kaggle_dir = os.path.expanduser('~/.kaggle'); "
+            "token_path = os.path.join(kaggle_dir, 'access_token'); "
+            "json_path = os.path.join(kaggle_dir, 'kaggle.json'); "
+            "if os.path.exists(token_path): "
+            "    with open(token_path) as f: token = f.read().strip(); "
+            "    with open(json_path, 'w') as f: json.dump({'username': 'rayhan313540001', 'key': token}, f); "
+            "    os.environ['KAGGLE_USERNAME'] = 'rayhan313540001'; "
+            "    os.environ['KAGGLE_KEY'] = token; "
             "import kagglehub; "
             'kagglehub.competition_download("nycu-data-mining-assignment-3", path="data"); '
             'print("Done")'
@@ -62,8 +70,10 @@ class InstallWithData(install):
             print("[*] Downloaded successfully.")
             return
         if result.stderr:
-            print(f"    kagglehub error: {result.stderr.strip()[:300]}")
-
+            print(f"    kagglehub error:\n{result.stderr.strip()}")
+            print(f"    stdout: {result.stdout.strip()}")
+        if result.returncode != 0:
+            print(f"    return code: {result.returncode}")
         print("[!] Automatic download failed.")
         print("    Download data manually from the Kaggle competition page.")
         print("    Place train/ and test/ folders + sample_submission.csv in data/")
