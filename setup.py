@@ -53,9 +53,7 @@ class InstallWithData(install):
         print("[!] Requires ~/.kaggle/kaggle.json (Kaggle API key)")
 
         for handle in [
-            "data-mining-2026-assignment-3",
-            "dm-2026-assignment-3",
-            "human-activity-recognition-spring-2026",
+            "nycu-data-mining-assignment-3",
         ]:
             try:
                 kagglehub.competition_download(handle, path="data")
