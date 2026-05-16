@@ -45,23 +45,24 @@ class InstallWithData(install):
 
         print("[*] Downloading Kaggle competition data...")
 
-        # Ensure kagglehub works (fix version conflicts)
-        subprocess.check_call(
-            [sys.executable, "-m", "pip", "install", "--upgrade", "kagglehub", "kagglesdk", "-q"]
+        # Run download in subprocess to avoid kagglehub import version conflicts
+        download_script = (
+            "import kagglehub; "
+            'kagglehub.competition_download("nycu-data-mining-assignment-3", path="data"); '
+            'print("Done")'
         )
-        import kagglehub
-
-        for handle in [
-            "nycu-data-mining-assignment-3",
-        ]:
-            try:
-                kagglehub.competition_download(handle, path="data")
-                print(f"[*] Downloaded: {handle}")
-                return
-            except Exception:
-                continue
+        result = subprocess.run(
+            [sys.executable, "-c", download_script],
+            capture_output=True, text=True
+        )
+        if result.returncode == 0 and "Done" in result.stdout:
+            print("[*] Downloaded successfully.")
+            return
+        if result.stderr:
+            print(f"    kagglehub error: {result.stderr.strip()[:300]}")
 
         print("[!] Automatic download failed.")
+        print("    Download data manually from the Kaggle competition page.")
         print("    Place train/ and test/ folders + sample_submission.csv in data/")
 
 
