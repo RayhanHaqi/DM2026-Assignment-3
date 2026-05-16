@@ -2,6 +2,8 @@ from setuptools import setup, find_packages
 from setuptools.command.install import install
 import subprocess, sys, os, json
 
+KAGGLE_USERNAME = "rayhan313540001"
+
 
 def _setup_kaggle_auth():
     """Ensure ~/.kaggle/kaggle.json exists, converting access_token if needed."""
@@ -10,21 +12,44 @@ def _setup_kaggle_auth():
     access_token = os.path.join(kaggle_dir, "access_token")
 
     if os.path.exists(kaggle_json):
-        return True
+        return kaggle_json
 
     if os.path.exists(access_token):
         with open(access_token) as f:
             token = f.read().strip()
-        # Token might be "KGAT_xxx" — just the key, no username prefix
-        # Try key-only format that kagglehub accepts
         os.makedirs(kaggle_dir, exist_ok=True)
         with open(kaggle_json, "w") as f:
-            json.dump({"username": "token", "key": token}, f)
+            json.dump({"username": KAGGLE_USERNAME, "key": token}, f)
         os.chmod(kaggle_json, 0o600)
         print("[*] Converted ~/.kaggle/access_token -> ~/.kaggle/kaggle.json")
-        return True
+        return kaggle_json
 
-    return False
+    return None
+
+
+_DOWNLOAD_SCRIPT = """
+import subprocess, sys
+subprocess.run([sys.executable, '-m', 'pip', 'uninstall', '-y', 'kagglehub', 'kagglesdk'], capture_output=True)
+subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'kagglehub', '-q'])
+import kagglehub
+kagglehub.competition_download(__COMPETITION__, path="__DATADIR__")
+print("Done")
+"""
+
+
+def _download_competition(competition_handle, data_dir):
+    script = _DOWNLOAD_SCRIPT.replace("__COMPETITION__", repr(competition_handle))
+    script = script.replace("__DATADIR__", repr(data_dir))
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True, text=True,
+        env={**os.environ, "KAGGLE_USERNAME": KAGGLE_USERNAME}
+    )
+    if result.returncode != 0 or "Done" not in result.stdout:
+        print(f"    kagglehub error:\n{result.stderr.strip()}")
+        print(f"    stdout: {result.stdout.strip()}")
+        return False
+    return True
 
 
 class InstallWithData(install):
@@ -42,38 +67,12 @@ class InstallWithData(install):
             return
 
         _setup_kaggle_auth()
-
         print("[*] Downloading Kaggle competition data...")
 
-        # Run download in subprocess after fixing kagglehub dependencies
-        download_script = (
-            "import subprocess, sys, os, json; "
-            "subprocess.run([sys.executable, '-m', 'pip', 'uninstall', '-y', 'kagglehub', 'kagglesdk'], capture_output=True); "
-            "subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'kagglehub', '-q']); "
-            "kaggle_dir = os.path.expanduser('~/.kaggle'); "
-            "token_path = os.path.join(kaggle_dir, 'access_token'); "
-            "json_path = os.path.join(kaggle_dir, 'kaggle.json'); "
-            "if os.path.exists(token_path): "
-            "    with open(token_path) as f: token = f.read().strip(); "
-            "    with open(json_path, 'w') as f: json.dump({'username': 'rayhan313540001', 'key': token}, f); "
-            "    os.environ['KAGGLE_USERNAME'] = 'rayhan313540001'; "
-            "    os.environ['KAGGLE_KEY'] = token; "
-            "import kagglehub; "
-            'kagglehub.competition_download("nycu-data-mining-assignment-3", path="data"); '
-            'print("Done")'
-        )
-        result = subprocess.run(
-            [sys.executable, "-c", download_script],
-            capture_output=True, text=True
-        )
-        if result.returncode == 0 and "Done" in result.stdout:
+        if _download_competition("nycu-data-mining-assignment-3", "data"):
             print("[*] Downloaded successfully.")
             return
-        if result.stderr:
-            print(f"    kagglehub error:\n{result.stderr.strip()}")
-            print(f"    stdout: {result.stdout.strip()}")
-        if result.returncode != 0:
-            print(f"    return code: {result.returncode}")
+
         print("[!] Automatic download failed.")
         print("    Download data manually from the Kaggle competition page.")
         print("    Place train/ and test/ folders + sample_submission.csv in data/")
