@@ -73,9 +73,10 @@ class InstallWithData(install):
             print("[*] Downloaded successfully.")
             return
 
-        print("[!] Automatic download failed.")
-        print("    Download data manually from the Kaggle competition page.")
-        print("    Place train/ and test/ folders + sample_submission.csv in data/")
+        print("[!] Automatic download failed — invite-only competition.")
+        print("    1. Accept invite and download manually:")
+        print("       https://www.kaggle.com/t/7177902eb8b34b25a75e932d4e235b32")
+        print("    2. Place train/ and test/ folders + sample_submission.csv in data/")
 
 
 setup(
