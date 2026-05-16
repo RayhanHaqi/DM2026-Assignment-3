@@ -3,6 +3,7 @@ import pandas as pd
 from sklearn.model_selection import GroupKFold
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import f1_score
+from imblearn.over_sampling import SMOTE
 
 import optuna
 from xgboost import XGBClassifier
@@ -54,6 +55,9 @@ def _xgb_objective(trial, X, y, groups):
         scaler = StandardScaler()
         X_tr_s = scaler.fit_transform(X_tr)
         X_val_s = scaler.transform(X_val)
+
+        smote = SMOTE(random_state=42, k_neighbors=min(5, min(np.bincount(y_tr)) - 1))
+        X_tr_s, y_tr = smote.fit_resample(X_tr_s, y_tr)
 
         model.fit(X_tr_s, y_tr)
         preds = model.predict(X_val_s)
@@ -112,6 +116,9 @@ def _lgb_objective(trial, X, y, groups):
         scaler = StandardScaler()
         X_tr_s = scaler.fit_transform(X_tr)
         X_val_s = scaler.transform(X_val)
+
+        smote = SMOTE(random_state=42, k_neighbors=min(5, min(np.bincount(y_tr)) - 1))
+        X_tr_s, y_tr = smote.fit_resample(X_tr_s, y_tr)
 
         model.fit(X_tr_s, y_tr)
         preds = model.predict(X_val_s)

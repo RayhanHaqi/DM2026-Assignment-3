@@ -87,6 +87,11 @@ def load_test_data(base_path):
 
 def generate_submission(file_ids, preds, output_path):
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    base, ext = os.path.splitext(output_path)
+    version = 1
+    while os.path.exists(f"{base}_v{version}{ext}"):
+        version += 1
+    versioned_path = f"{base}_v{version}{ext}"
     sub = pd.DataFrame({"Id": file_ids, "Label": preds})
-    sub.to_csv(output_path, index=False)
-    print(f"Saved {len(sub)} rows -> {output_path}")
+    sub.to_csv(versioned_path, index=False)
+    print(f"Saved {len(sub)} rows -> {versioned_path}")
