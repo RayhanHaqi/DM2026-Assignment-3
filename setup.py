@@ -35,12 +35,6 @@ class InstallWithData(install):
         self._download_data()
 
     def _download_data(self):
-        try:
-            import kagglehub
-        except ImportError:
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "kagglehub"])
-            import kagglehub
-
         os.makedirs("data", exist_ok=True)
 
         if os.path.isdir("data/train") or os.path.isdir("data/train/train"):
@@ -50,7 +44,12 @@ class InstallWithData(install):
         _setup_kaggle_auth()
 
         print("[*] Downloading Kaggle competition data...")
-        print("[!] Requires ~/.kaggle/kaggle.json (Kaggle API key)")
+
+        # Ensure kagglehub works (fix version conflicts)
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", "--upgrade", "kagglehub", "kagglesdk", "-q"]
+        )
+        import kagglehub
 
         for handle in [
             "nycu-data-mining-assignment-3",
