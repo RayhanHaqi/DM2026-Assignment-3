@@ -4,6 +4,7 @@ import os
 from glob import glob
 
 FEATURE_COLS = ["mean_x", "mean_y", "mean_z", "std_x", "std_y", "std_z"]
+AGG_FUNCS = ["mean", "std", "min", "max", "q25", "q50", "q75"]
 
 
 def _aggregate_file(df):
@@ -18,29 +19,7 @@ def _aggregate_file(df):
             f"{col}__q25": series.quantile(0.25),
             f"{col}__q50": series.quantile(0.50),
             f"{col}__q75": series.quantile(0.75),
-            f"{col}__skew": series.skew(),
-            f"{col}__kurt": series.kurtosis(),
         })
-        jerk = series.diff().dropna()
-        if len(jerk) > 1:
-            rows.append({
-                f"{col}__jerk_mean": jerk.mean(),
-                f"{col}__jerk_std": jerk.std(),
-                f"{col}__jerk_max": jerk.max(),
-            })
-
-    sma = np.sqrt(df["mean_x"] ** 2 + df["mean_y"] ** 2 + df["mean_z"] ** 2)
-    rows.append({
-        "sma__mean": sma.mean(),
-        "sma__std": sma.std(),
-        "sma__min": sma.min(),
-        "sma__max": sma.max(),
-    })
-
-    for (a1, a2) in [("mean_x", "mean_y"), ("mean_x", "mean_z"), ("mean_y", "mean_z"),
-                       ("std_x", "std_y"), ("std_x", "std_z"), ("std_y", "std_z")]:
-        rows.append({f"{a1}_{a2}_corr": df[a1].corr(df[a2])})
-
     return pd.concat([pd.Series(r) for r in rows])
 
 

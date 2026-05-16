@@ -1,0 +1,12 @@
+Metadata-Version: 2.4
+Name: dm2026_asg3
+Version: 1.0
+Requires-Dist: numpy
+Requires-Dist: pandas
+Requires-Dist: scikit-learn
+Requires-Dist: xgboost
+Requires-Dist: lightgbm
+Requires-Dist: optuna
+Requires-Dist: matplotlib
+Requires-Dist: seaborn
+Dynamic: requires-dist

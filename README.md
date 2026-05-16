@@ -1,4 +1,4 @@
-# NYCU Data Mining (Spring 2026) Assignment 3 — Human Activity Recognition
+# NYCU Data Mining (Spring 2026) Assignment 3: Human Activity Recognition
 
 Kaggle competition: predict activity label (0–5) from wrist accelerometer data.
 
