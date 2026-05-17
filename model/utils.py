@@ -95,3 +95,14 @@ def generate_submission(file_ids, preds, output_path):
     sub = pd.DataFrame({"Id": file_ids, "Label": preds})
     sub.to_csv(versioned_path, index=False)
     print(f"Saved {len(sub)} rows -> {versioned_path}")
+
+    # Auto-track
+    tracker_path = os.path.join(os.path.dirname(output_path) or ".", "SUBMISSIONS.md")
+    from datetime import datetime
+    date_str = datetime.now().strftime("%b %d")
+    entry = f"| {os.path.basename(versioned_path)} | {date_str} | ? | ? | ? | ? | auto-generated |\n"
+    if not os.path.exists(tracker_path):
+        with open(tracker_path, "w") as f:
+            f.write("# ASG3 Submission Tracker\n\n| File | Date | Score | Model | Features | Notes |\n|------|------|-------|-------|----------|-------|\n")
+    with open(tracker_path, "a") as f:
+        f.write(entry)
