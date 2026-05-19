@@ -1,7 +1,9 @@
 import numpy as np
 import pandas as pd
 import os
+import hashlib
 from glob import glob
+from pathlib import Path
 
 FEATURE_COLS = ["mean_x", "mean_y", "mean_z", "std_x", "std_y", "std_z"]
 
@@ -63,24 +65,44 @@ def load_test_data(base_path):
     return X, ids, users
 
 
-def generate_submission(file_ids, preds, output_path):
-    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-    base, ext = os.path.splitext(output_path)
-    version = 1
-    while os.path.exists(f"{base}_v{version}{ext}"):
-        version += 1
-    versioned_path = f"{base}_v{version}{ext}"
+def generate_submission(
+    file_ids,
+    preds,
+    output_path,
+    timestamp=None,
+    model="?",
+    features="?",
+    notes="auto-generated",
+):
+    output_path = Path(output_path)
+    output_dir = output_path.parent if str(output_path.parent) != "" else Path(".")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if timestamp is None:
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    sequence = 1
+    while True:
+        versioned_path = output_dir / f"{output_path.stem}_{timestamp}_{sequence:02d}{output_path.suffix}"
+        if not any(output_dir.glob(f"*_{timestamp}_{sequence:02d}{output_path.suffix}")):
+            break
+        sequence += 1
+
     sub = pd.DataFrame({"Id": file_ids, "Label": preds})
     sub.to_csv(versioned_path, index=False)
     print(f"Saved {len(sub)} rows -> {versioned_path}")
 
-    # Auto-track
-    tracker_path = os.path.join(os.path.dirname(output_path) or ".", "SUBMISSIONS.md")
-    from datetime import datetime
-    date_str = datetime.now().strftime("%b %d")
-    entry = f"| {os.path.basename(versioned_path)} | {date_str} | ? | ? | ? | ? | auto-generated |\n"
-    if not os.path.exists(tracker_path):
-        with open(tracker_path, "w") as f:
-            f.write("# ASG3 Submission Tracker\n\n| File | Date | Score | Model | Features | Notes |\n|------|------|-------|-------|----------|-------|\n")
-    with open(tracker_path, "a") as f:
+    tracker_path = output_dir / "SUBMISSIONS.md"
+    md5_prefix = hashlib.md5(versioned_path.read_bytes()).hexdigest()[:8]
+    entry = f"| {versioned_path.name} | {timestamp} | {md5_prefix} | ? | {model} | {features} | {notes} |\n"
+    if not tracker_path.exists():
+        tracker_path.write_text(
+            "# ASG3 Submission Tracker\n\n"
+            "| File | Date | MD5 (first 8) | Kaggle Score | Model | Features | Notes |\n"
+            "|------|------|---------------|-------------|-------|----------|-------|\n"
+        )
+    with tracker_path.open("a") as f:
         f.write(entry)
+
+    return versioned_path

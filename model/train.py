@@ -1,8 +1,9 @@
 import numpy as np
 import pandas as pd
+from sklearn.base import clone
 from sklearn.model_selection import GroupKFold
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import f1_score
+from sklearn.metrics import accuracy_score, f1_score
 from imblearn.over_sampling import SMOTE
 
 import optuna
@@ -10,8 +11,28 @@ from xgboost import XGBClassifier
 from lightgbm import LGBMClassifier
 
 
-def cv_evaluate(model, X, y, groups, n_splits=5):
-    """GroupKFold CV returning per-fold F1-macro and mean/std."""
+def _score_predictions(y_true, preds, metric):
+    if metric == "f1_macro":
+        return f1_score(y_true, preds, average="macro")
+    if metric == "accuracy":
+        return accuracy_score(y_true, preds)
+    raise ValueError("metric must be 'f1_macro' or 'accuracy'")
+
+
+def _apply_smote(X, y):
+    class_counts = np.bincount(np.asarray(y))
+    present_counts = class_counts[class_counts > 0]
+    if len(present_counts) < 2:
+        return X, y
+    min_count = present_counts.min()
+    if min_count < 2:
+        return X, y
+    smote = SMOTE(random_state=42, k_neighbors=min(5, min_count - 1))
+    return smote.fit_resample(X, y)
+
+
+def cv_evaluate(model, X, y, groups, n_splits=5, metric="f1_macro", use_smote=False):
+    """GroupKFold CV returning per-fold scores and mean/std."""
     kf = GroupKFold(n_splits=n_splits)
     scores = []
     for fold, (train_idx, val_idx) in enumerate(kf.split(X, y, groups)):
@@ -24,14 +45,18 @@ def cv_evaluate(model, X, y, groups, n_splits=5):
         X_tr_s = scaler.fit_transform(X_tr)
         X_val_s = scaler.transform(X_val)
 
-        model.fit(X_tr_s, y_tr)
-        preds = model.predict(X_val_s)
-        score = f1_score(y_val, preds, average="macro")
+        if use_smote:
+            X_tr_s, y_tr = _apply_smote(X_tr_s, y_tr)
+
+        fold_model = clone(model)
+        fold_model.fit(X_tr_s, y_tr)
+        preds = fold_model.predict(X_val_s)
+        score = _score_predictions(y_val, preds, metric)
         scores.append(score)
     return scores, np.mean(scores), np.std(scores)
 
 
-def _xgb_objective(trial, X, y, groups):
+def _xgb_objective(trial, X, y, groups, metric="f1_macro", use_smote=True):
     params = {
         "n_estimators": trial.suggest_int("n_estimators", 100, 1000),
         "max_depth": trial.suggest_int("max_depth", 3, 12),
@@ -56,13 +81,12 @@ def _xgb_objective(trial, X, y, groups):
         X_tr_s = scaler.fit_transform(X_tr)
         X_val_s = scaler.transform(X_val)
 
-        smote = SMOTE(random_state=42, k_neighbors=min(5, min(np.bincount(y_tr)) - 1))
-        X_tr_s, y_tr = smote.fit_resample(X_tr_s, y_tr)
+        if use_smote:
+            X_tr_s, y_tr = _apply_smote(X_tr_s, y_tr)
 
         model.fit(X_tr_s, y_tr)
         preds = model.predict(X_val_s)
-        fold_f1 = f1_score(y_val, preds, average="macro")
-        fold_scores.append(fold_f1)
+        fold_scores.append(_score_predictions(y_val, preds, metric))
 
         trial.report(np.mean(fold_scores), fold_i)
         if trial.should_prune():
@@ -71,14 +95,14 @@ def _xgb_objective(trial, X, y, groups):
     return np.mean(fold_scores)
 
 
-def tune_xgboost(X, y, groups, n_trials=50):
+def tune_xgboost(X, y, groups, n_trials=50, metric="f1_macro", use_smote=True):
     study = optuna.create_study(
         direction="maximize",
         sampler=optuna.samplers.TPESampler(seed=42),
         pruner=optuna.pruners.MedianPruner(),
     )
     study.optimize(
-        lambda trial: _xgb_objective(trial, X, y, groups),
+        lambda trial: _xgb_objective(trial, X, y, groups, metric=metric, use_smote=use_smote),
         n_trials=n_trials,
         n_jobs=1,
     )
@@ -87,11 +111,13 @@ def tune_xgboost(X, y, groups, n_trials=50):
     best_model = XGBClassifier(**best_params)
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
+    if use_smote:
+        X_scaled, y = _apply_smote(X_scaled, y)
     best_model.fit(X_scaled, y)
     return best_params, best_model
 
 
-def _lgb_objective(trial, X, y, groups):
+def _lgb_objective(trial, X, y, groups, metric="f1_macro", use_smote=True):
     params = {
         "n_estimators": trial.suggest_int("n_estimators", 100, 1000),
         "num_leaves": trial.suggest_int("num_leaves", 15, 255),
@@ -117,13 +143,12 @@ def _lgb_objective(trial, X, y, groups):
         X_tr_s = scaler.fit_transform(X_tr)
         X_val_s = scaler.transform(X_val)
 
-        smote = SMOTE(random_state=42, k_neighbors=min(5, min(np.bincount(y_tr)) - 1))
-        X_tr_s, y_tr = smote.fit_resample(X_tr_s, y_tr)
+        if use_smote:
+            X_tr_s, y_tr = _apply_smote(X_tr_s, y_tr)
 
         model.fit(X_tr_s, y_tr)
         preds = model.predict(X_val_s)
-        fold_f1 = f1_score(y_val, preds, average="macro")
-        fold_scores.append(fold_f1)
+        fold_scores.append(_score_predictions(y_val, preds, metric))
 
         trial.report(np.mean(fold_scores), fold_i)
         if trial.should_prune():
@@ -132,14 +157,14 @@ def _lgb_objective(trial, X, y, groups):
     return np.mean(fold_scores)
 
 
-def tune_lightgbm(X, y, groups, n_trials=50):
+def tune_lightgbm(X, y, groups, n_trials=50, metric="f1_macro", use_smote=True):
     study = optuna.create_study(
         direction="maximize",
         sampler=optuna.samplers.TPESampler(seed=42),
         pruner=optuna.pruners.MedianPruner(),
     )
     study.optimize(
-        lambda trial: _lgb_objective(trial, X, y, groups),
+        lambda trial: _lgb_objective(trial, X, y, groups, metric=metric, use_smote=use_smote),
         n_trials=n_trials,
         n_jobs=1,
     )
@@ -148,5 +173,7 @@ def tune_lightgbm(X, y, groups, n_trials=50):
     best_model = LGBMClassifier(**best_params)
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
+    if use_smote:
+        X_scaled, y = _apply_smote(X_scaled, y)
     best_model.fit(X_scaled, y)
     return best_params, best_model
