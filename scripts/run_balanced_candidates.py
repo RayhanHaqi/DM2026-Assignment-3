@@ -14,7 +14,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from model.cnn import fit_cnn_full, predict_cnn, train_cnn_candidate
+from model.rocket import fit_rocket_full, predict_rocket, train_rocket_candidate
 from model.sequence import load_test_sequences, load_train_sequences
+from model.temporal_features import combine_base_and_temporal_features
 from model.train import _apply_smote, cv_evaluate, tune_lightgbm, tune_xgboost
 from model.utils import generate_submission, load_test_data, load_train_data
 
@@ -40,6 +42,10 @@ def _prediction_distribution(preds):
 
 def daily_tree_candidate_names():
     return ["lgb_macro_smote_refresh", "xgb_macro_smote_refresh"]
+
+
+def plateau_candidate_names():
+    return ["xgb_final_fit_audit", "xgb_targeted_temporal", "rocket_sequence"]
 
 
 def validate_submission_frame(file_ids, preds, expected_rows=6849):
@@ -198,6 +204,72 @@ def _run_daily_tree_candidates(X_train, y_train, users, X_test, test_ids, args):
     ]
 
 
+def _run_plateau_tree_candidates(X_train, y_train, users, X_test, test_ids, X_seq, X_test_seq, args):
+    audit_name, temporal_name, _ = plateau_candidate_names()
+    X_train_temporal = combine_base_and_temporal_features(X_train, X_seq)
+    X_test_temporal = combine_base_and_temporal_features(X_test, X_test_seq)
+    return [
+        _run_xgb_candidate(
+            audit_name,
+            X_train,
+            y_train,
+            users,
+            X_test,
+            test_ids,
+            args,
+            use_smote=True,
+            metric="f1_macro",
+            final_fit_smote=False,
+            features="42 base",
+        ),
+        _run_xgb_candidate(
+            temporal_name,
+            X_train_temporal,
+            y_train,
+            users,
+            X_test_temporal,
+            test_ids,
+            args,
+            use_smote=True,
+            metric="f1_macro",
+            final_fit_smote=False,
+            features="42 base + targeted temporal",
+        ),
+    ]
+
+
+def _run_rocket_candidate(X_seq, y, users, X_test_seq, test_ids, args):
+    name = plateau_candidate_names()[2]
+    print(f"\nTraining {name}...")
+    result = train_rocket_candidate(
+        X_seq,
+        y,
+        users,
+        n_kernels=args.rocket_kernels,
+        random_state=args.seed,
+    )
+    model = fit_rocket_full(X_seq, y, n_kernels=args.rocket_kernels, random_state=args.seed)
+    preds = predict_rocket(model, X_test_seq)
+    path = _write_submission(
+        name,
+        test_ids,
+        preds,
+        args.output_dir,
+        args.no_submit,
+        model="ROCKET Ridge",
+        features="raw 300x6 sequence",
+        notes=f"n_kernels={args.rocket_kernels}; grouped validation",
+    )
+    return {
+        "name": name,
+        "accuracy": result.accuracy,
+        "accuracy_std": result.accuracy_std,
+        "f1_macro": result.f1_macro,
+        "file": path,
+        "scores": result.accuracy_scores,
+    }
+
+
 def _run_cnn_candidate(X_seq, y, users, X_test_seq, test_ids, args, name="cnn_raw_sequence", variant="small", normalize=False):
     print(f"\nTraining {name}...")
     result = train_cnn_candidate(
@@ -276,6 +348,12 @@ def parse_args():
         action="store_true",
         help="Run today's approved candidates: LGB macro/SMOTE, XGB macro/SMOTE, improved CNN.",
     )
+    parser.add_argument(
+        "--plateau-20260520",
+        action="store_true",
+        help="Run plateau-breaker candidates: XGB final-fit audit, targeted temporal XGB, ROCKET sequence.",
+    )
+    parser.add_argument("--rocket-kernels", type=int, default=512)
     parser.add_argument("--no-submit", action="store_true")
     parser.add_argument("--smoke", action="store_true")
     return parser.parse_args()
@@ -288,6 +366,7 @@ def main():
         args.cnn_epochs = 1
         args.cnn_patience = 1
         args.per_user_limit = 2
+        args.rocket_kernels = 8
         args.no_submit = True
 
     train_path = _split_path(args.data_dir, "train")
@@ -299,8 +378,44 @@ def main():
     X_train, y_train, train_ids, users = _limit_by_user(X_train, train_ids, users, y_train, args.per_user_limit)
     X_test, test_ids, test_users = _limit_by_user(X_test, test_ids, test_users, per_user_limit=args.per_user_limit)
 
-    if args.daily_20260520:
+    print(f"\nLoading sequence data from {train_path} and {test_path}...")
+    X_seq, y_seq, seq_ids, seq_users = load_train_sequences(train_path)
+    X_test_seq, seq_test_ids, seq_test_users = load_test_sequences(test_path)
+    X_seq, y_seq, seq_ids, seq_users = _limit_by_user(X_seq, seq_ids, seq_users, y_seq, args.per_user_limit)
+    X_test_seq, seq_test_ids, seq_test_users = _limit_by_user(
+        X_test_seq,
+        seq_test_ids,
+        seq_test_users,
+        per_user_limit=args.per_user_limit,
+    )
+
+    if args.plateau_20260520:
+        results = _run_plateau_tree_candidates(
+            X_train,
+            y_train,
+            users,
+            X_test,
+            test_ids,
+            X_seq,
+            X_test_seq,
+            args,
+        )
+        results.append(_run_rocket_candidate(X_seq, y_seq, seq_users, X_test_seq, seq_test_ids, args))
+    elif args.daily_20260520:
         results = _run_daily_tree_candidates(X_train, y_train, users, X_test, test_ids, args)
+        results.append(
+            _run_cnn_candidate(
+                X_seq,
+                y_seq.to_numpy(),
+                seq_users.to_numpy(),
+                X_test_seq,
+                seq_test_ids,
+                args,
+                name="cnn_improved_sequence",
+                variant="improved",
+                normalize=True,
+            )
+        )
     else:
         results = [
             _run_lgb_candidate("lgb_acc_no_smote", X_train, y_train, users, X_test, test_ids, args, use_smote=False),
@@ -321,33 +436,19 @@ def main():
                     metric="accuracy",
                 )
             )
-
-    print(f"\nLoading sequence data from {train_path} and {test_path}...")
-    X_seq, y_seq, seq_ids, seq_users = load_train_sequences(train_path)
-    X_test_seq, seq_test_ids, seq_test_users = load_test_sequences(test_path)
-    X_seq, y_seq, seq_ids, seq_users = _limit_by_user(X_seq, seq_ids, seq_users, y_seq, args.per_user_limit)
-    X_test_seq, seq_test_ids, seq_test_users = _limit_by_user(
-        X_test_seq,
-        seq_test_ids,
-        seq_test_users,
-        per_user_limit=args.per_user_limit,
-    )
-    cnn_name = "cnn_improved_sequence" if args.daily_20260520 else "cnn_raw_sequence"
-    cnn_variant = "improved" if args.daily_20260520 else "small"
-    cnn_normalize = bool(args.daily_20260520)
-    results.append(
-        _run_cnn_candidate(
-            X_seq,
-            y_seq.to_numpy(),
-            seq_users.to_numpy(),
-            X_test_seq,
-            seq_test_ids,
-            args,
-            name=cnn_name,
-            variant=cnn_variant,
-            normalize=cnn_normalize,
+        results.append(
+            _run_cnn_candidate(
+                X_seq,
+                y_seq.to_numpy(),
+                seq_users.to_numpy(),
+                X_test_seq,
+                seq_test_ids,
+                args,
+                name="cnn_raw_sequence",
+                variant="small",
+                normalize=False,
+            )
         )
-    )
 
     _print_summary(results)
 

@@ -174,3 +174,26 @@ def test_run_xgb_candidate_uses_separate_final_fit_smote(monkeypatch):
     assert ("cv", True, "f1_macro") in calls
     assert ("fit", False) in calls
     assert result["name"] == "xgb_final_fit_audit"
+
+
+def test_plateau_candidate_names_match_spec():
+    from scripts.run_balanced_candidates import plateau_candidate_names
+
+    assert plateau_candidate_names() == [
+        "xgb_final_fit_audit",
+        "xgb_targeted_temporal",
+        "rocket_sequence",
+    ]
+
+
+def test_runner_script_help_includes_plateau_mode():
+    result = subprocess.run(
+        [sys.executable, "scripts/run_balanced_candidates.py", "--help"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert "--plateau-20260520" in result.stdout
+    assert "--rocket-kernels" in result.stdout
