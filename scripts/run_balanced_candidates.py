@@ -22,6 +22,10 @@ from model.utils import generate_submission, load_test_data, load_train_data
 VALID_LABELS = {0, 1, 2, 3, 4, 5}
 
 
+def daily_tree_candidate_names():
+    return ["lgb_macro_smote_refresh", "xgb_macro_smote_refresh"]
+
+
 def validate_submission_frame(file_ids, preds, expected_rows=6849):
     frame = pd.DataFrame({"Id": file_ids, "Label": preds})
     if len(frame) != expected_rows:
@@ -236,6 +240,11 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--per-user-limit", type=int, default=None)
     parser.add_argument("--include-xgb", action="store_true")
+    parser.add_argument(
+        "--daily-20260520",
+        action="store_true",
+        help="Run today's approved candidates: LGB macro/SMOTE, XGB macro/SMOTE, improved CNN.",
+    )
     parser.add_argument("--no-submit", action="store_true")
     parser.add_argument("--smoke", action="store_true")
     return parser.parse_args()

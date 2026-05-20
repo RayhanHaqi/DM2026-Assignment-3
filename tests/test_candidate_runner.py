@@ -5,6 +5,8 @@ import sys
 
 from scripts.run_balanced_candidates import validate_submission_frame
 
+ROOT = __import__("pathlib").Path(__file__).resolve().parents[1]
+
 
 def test_validate_submission_frame_accepts_valid_labels():
     frame = validate_submission_frame([10, 11], [0, 5], expected_rows=2)
@@ -31,3 +33,24 @@ def test_runner_script_help_is_directly_executable():
 
     assert result.returncode == 0
     assert "Run balanced ASG3 candidates" in result.stdout
+
+
+def test_daily_tree_candidate_names_are_new_macro_f1_smote():
+    from scripts.run_balanced_candidates import daily_tree_candidate_names
+
+    assert daily_tree_candidate_names() == [
+        "lgb_macro_smote_refresh",
+        "xgb_macro_smote_refresh",
+    ]
+
+
+def test_runner_script_help_includes_daily_20260520_mode():
+    result = subprocess.run(
+        [sys.executable, "scripts/run_balanced_candidates.py", "--help"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert "--daily-20260520" in result.stdout
