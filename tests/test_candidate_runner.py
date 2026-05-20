@@ -121,3 +121,56 @@ def test_prediction_distribution_counts_labels():
     from scripts.run_balanced_candidates import _prediction_distribution
 
     assert _prediction_distribution([0, 1, 1, 5]) == {0: 1, 1: 2, 2: 0, 3: 0, 4: 0, 5: 1}
+
+
+def test_run_xgb_candidate_uses_separate_final_fit_smote(monkeypatch):
+    import numpy as np
+    import pandas as pd
+    import scripts.run_balanced_candidates as runner
+
+    calls = []
+
+    class FakeXGB:
+        def __init__(self, **params):
+            self.params = params
+
+    class Args:
+        tree_trials = 1
+        output_dir = "output"
+        no_submit = True
+
+    def fake_tune(X_train, y_train, users, n_trials, metric, use_smote):
+        calls.append(("tune", use_smote, metric))
+        return {"random_state": 42}, object()
+
+    def fake_cv(model, X_train, y_train, users, metric, use_smote):
+        calls.append(("cv", use_smote, metric))
+        return [0.5, 0.6], 0.55, 0.05
+
+    def fake_fit(model_cls, params, X_train, y_train, X_test, use_smote):
+        calls.append(("fit", use_smote))
+        return np.array([0, 1])
+
+    monkeypatch.setattr(runner, "XGBClassifier", FakeXGB)
+    monkeypatch.setattr(runner, "tune_xgboost", fake_tune)
+    monkeypatch.setattr(runner, "cv_evaluate", fake_cv)
+    monkeypatch.setattr(runner, "_fit_tree_model", fake_fit)
+
+    result = runner._run_xgb_candidate(
+        "xgb_final_fit_audit",
+        pd.DataFrame({"a": [0.0, 1.0]}),
+        pd.Series([0, 1]),
+        pd.Series(["u1", "u2"]),
+        pd.DataFrame({"a": [0.5, 1.5]}),
+        pd.Series([10, 11]),
+        Args(),
+        use_smote=True,
+        metric="f1_macro",
+        final_fit_smote=False,
+    )
+
+    assert ("tune", True, "f1_macro") in calls
+    assert ("cv", True, "accuracy") in calls
+    assert ("cv", True, "f1_macro") in calls
+    assert ("fit", False) in calls
+    assert result["name"] == "xgb_final_fit_audit"
