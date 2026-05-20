@@ -22,6 +22,22 @@ from model.utils import generate_submission, load_test_data, load_train_data
 VALID_LABELS = {0, 1, 2, 3, 4, 5}
 
 
+def _summarize_scores(scores):
+    scores = np.asarray(scores, dtype=float)
+    return {
+        "mean": float(scores.mean()),
+        "std": float(scores.std()),
+        "worst": float(scores.min()),
+    }
+
+
+def _prediction_distribution(preds):
+    values, counts = np.unique(np.asarray(preds, dtype=int), return_counts=True)
+    distribution = {label: 0 for label in sorted(VALID_LABELS)}
+    distribution.update({int(label): int(count) for label, count in zip(values, counts)})
+    return distribution
+
+
 def daily_tree_candidate_names():
     return ["lgb_macro_smote_refresh", "xgb_macro_smote_refresh"]
 

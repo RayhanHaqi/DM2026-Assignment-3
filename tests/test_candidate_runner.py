@@ -105,3 +105,19 @@ def test_daily_mode_smoke_is_directly_executable():
     assert "lgb_macro_smote_refresh" in result.stdout
     assert "xgb_macro_smote_refresh" in result.stdout
     assert "cnn_improved_sequence" in result.stdout
+
+
+def test_summarize_scores_includes_worst_fold():
+    from scripts.run_balanced_candidates import _summarize_scores
+
+    summary = _summarize_scores([0.8, 0.6, 0.7])
+
+    assert summary["worst"] == 0.6
+    assert summary["mean"] == pytest.approx(0.7)
+    assert summary["std"] == pytest.approx(0.081649658, rel=1e-6)
+
+
+def test_prediction_distribution_counts_labels():
+    from scripts.run_balanced_candidates import _prediction_distribution
+
+    assert _prediction_distribution([0, 1, 1, 5]) == {0: 1, 1: 2, 2: 0, 3: 0, 4: 0, 5: 1}
