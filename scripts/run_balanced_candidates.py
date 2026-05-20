@@ -90,14 +90,14 @@ def _write_submission(name, test_ids, preds, output_dir, no_submit, model, featu
     )
 
 
-def _run_lgb_candidate(name, X_train, y_train, users, X_test, test_ids, args, use_smote):
+def _run_lgb_candidate(name, X_train, y_train, users, X_test, test_ids, args, use_smote, metric="accuracy"):
     print(f"\nTuning {name}...")
     params, _ = tune_lightgbm(
         X_train,
         y_train,
         users,
         n_trials=args.tree_trials,
-        metric="accuracy",
+        metric=metric,
         use_smote=use_smote,
     )
     scores, acc, acc_std = cv_evaluate(
@@ -125,21 +125,20 @@ def _run_lgb_candidate(name, X_train, y_train, users, X_test, test_ids, args, us
         args.no_submit,
         model="LightGBM",
         features="42 base",
-        notes=f"accuracy-tuned; {args.tree_trials} trials; use_smote={use_smote}",
+        notes=f"{metric}-tuned; {args.tree_trials} trials; use_smote={use_smote}",
     )
     return {"name": name, "accuracy": acc, "accuracy_std": acc_std, "f1_macro": f1, "file": path, "scores": scores}
 
 
-def _run_xgb_candidate(X_train, y_train, users, X_test, test_ids, args):
-    name = "xgb_acc_no_smote"
+def _run_xgb_candidate(name, X_train, y_train, users, X_test, test_ids, args, use_smote=False, metric="accuracy"):
     print(f"\nTuning {name}...")
     params, _ = tune_xgboost(
         X_train,
         y_train,
         users,
         n_trials=args.tree_trials,
-        metric="accuracy",
-        use_smote=False,
+        metric=metric,
+        use_smote=use_smote,
     )
     scores, acc, acc_std = cv_evaluate(
         XGBClassifier(**params),
@@ -147,7 +146,7 @@ def _run_xgb_candidate(X_train, y_train, users, X_test, test_ids, args):
         y_train,
         users,
         metric="accuracy",
-        use_smote=False,
+        use_smote=use_smote,
     )
     _, f1, _ = cv_evaluate(
         XGBClassifier(**params),
@@ -155,9 +154,9 @@ def _run_xgb_candidate(X_train, y_train, users, X_test, test_ids, args):
         y_train,
         users,
         metric="f1_macro",
-        use_smote=False,
+        use_smote=use_smote,
     )
-    preds = _fit_tree_model(XGBClassifier, params, X_train, y_train, X_test, use_smote=False)
+    preds = _fit_tree_model(XGBClassifier, params, X_train, y_train, X_test, use_smote=use_smote)
     path = _write_submission(
         name,
         test_ids,
@@ -166,9 +165,17 @@ def _run_xgb_candidate(X_train, y_train, users, X_test, test_ids, args):
         args.no_submit,
         model="XGBoost",
         features="42 base",
-        notes=f"accuracy-tuned; {args.tree_trials} trials; no SMOTE",
+        notes=f"{metric}-tuned; {args.tree_trials} trials; use_smote={use_smote}",
     )
     return {"name": name, "accuracy": acc, "accuracy_std": acc_std, "f1_macro": f1, "file": path, "scores": scores}
+
+
+def _run_daily_tree_candidates(X_train, y_train, users, X_test, test_ids, args):
+    lgb_name, xgb_name = daily_tree_candidate_names()
+    return [
+        _run_lgb_candidate(lgb_name, X_train, y_train, users, X_test, test_ids, args, use_smote=True, metric="f1_macro"),
+        _run_xgb_candidate(xgb_name, X_train, y_train, users, X_test, test_ids, args, use_smote=True, metric="f1_macro"),
+    ]
 
 
 def _run_cnn_candidate(X_seq, y, users, X_test_seq, test_ids, args):
@@ -274,7 +281,19 @@ def main():
     ]
 
     if args.include_xgb:
-        results.append(_run_xgb_candidate(X_train, y_train, users, X_test, test_ids, args))
+        results.append(
+            _run_xgb_candidate(
+                "xgb_acc_no_smote",
+                X_train,
+                y_train,
+                users,
+                X_test,
+                test_ids,
+                args,
+                use_smote=False,
+                metric="accuracy",
+            )
+        )
 
     print(f"\nLoading sequence data from {train_path} and {test_path}...")
     X_seq, y_seq, seq_ids, seq_users = load_train_sequences(train_path)

@@ -54,3 +54,40 @@ def test_runner_script_help_includes_daily_20260520_mode():
     )
 
     assert "--daily-20260520" in result.stdout
+
+
+def test_daily_mode_dispatches_new_tree_candidates(monkeypatch):
+    import scripts.run_balanced_candidates as runner
+
+    calls = []
+
+    class Args:
+        tree_trials = 1
+        output_dir = "output"
+        no_submit = True
+
+    def fake_lgb(name, X_train, y_train, users, X_test, test_ids, args, use_smote, metric):
+        calls.append(("lgb", name, use_smote, metric))
+        return {"name": name, "accuracy": 0.1, "accuracy_std": 0.0, "f1_macro": 0.2, "file": None, "scores": [0.1]}
+
+    def fake_xgb(name, X_train, y_train, users, X_test, test_ids, args, use_smote, metric):
+        calls.append(("xgb", name, use_smote, metric))
+        return {"name": name, "accuracy": 0.1, "accuracy_std": 0.0, "f1_macro": 0.2, "file": None, "scores": [0.1]}
+
+    monkeypatch.setattr(runner, "_run_lgb_candidate", fake_lgb)
+    monkeypatch.setattr(runner, "_run_xgb_candidate", fake_xgb)
+
+    results = runner._run_daily_tree_candidates(
+        X_train=None,
+        y_train=None,
+        users=None,
+        X_test=None,
+        test_ids=None,
+        args=Args(),
+    )
+
+    assert [row[1:] for row in calls] == [
+        ("lgb_macro_smote_refresh", True, "f1_macro"),
+        ("xgb_macro_smote_refresh", True, "f1_macro"),
+    ]
+    assert [row["name"] for row in results] == runner.daily_tree_candidate_names()
