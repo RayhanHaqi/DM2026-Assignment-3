@@ -16,25 +16,65 @@ class CnnResult:
     best_epoch: int
 
 
+class SequenceNormalizer:
+    def __init__(self, mean, std):
+        self.mean = mean.astype(np.float32)
+        self.std = std.astype(np.float32)
+
+    @classmethod
+    def fit(cls, X):
+        mean = X.mean(axis=(0, 1), keepdims=True)
+        std = X.std(axis=(0, 1), keepdims=True)
+        std = np.where(std < 1e-6, 1.0, std)
+        return cls(mean, std)
+
+    def transform(self, X):
+        return ((X - self.mean) / self.std).astype(np.float32)
+
+
 class HAR1DCNN(nn.Module):
-    def __init__(self, n_features=6, n_classes=6):
+    def __init__(self, n_features=6, n_classes=6, n_channels=None, variant="small"):
         super().__init__()
+        if n_channels is not None:
+            n_features = n_channels
         self.register_buffer("feature_mean", torch.zeros(1, 1, n_features))
         self.register_buffer("feature_std", torch.ones(1, 1, n_features))
-        self.net = nn.Sequential(
-            nn.Conv1d(n_features, 64, kernel_size=7, padding=3),
-            nn.BatchNorm1d(64),
-            nn.ReLU(),
-            nn.MaxPool1d(2),
-            nn.Conv1d(64, 128, kernel_size=5, padding=2),
-            nn.BatchNorm1d(128),
-            nn.ReLU(),
-            nn.AdaptiveAvgPool1d(1),
-        )
+        if variant == "small":
+            self.net = nn.Sequential(
+                nn.Conv1d(n_features, 64, kernel_size=7, padding=3),
+                nn.BatchNorm1d(64),
+                nn.ReLU(),
+                nn.MaxPool1d(2),
+                nn.Conv1d(64, 128, kernel_size=5, padding=2),
+                nn.BatchNorm1d(128),
+                nn.ReLU(),
+                nn.AdaptiveAvgPool1d(1),
+            )
+            head_in = 128
+        elif variant == "improved":
+            self.net = nn.Sequential(
+                nn.Conv1d(n_features, 64, kernel_size=9, padding=4),
+                nn.BatchNorm1d(64),
+                nn.ReLU(),
+                nn.Dropout(0.15),
+                nn.MaxPool1d(2),
+                nn.Conv1d(64, 128, kernel_size=7, padding=3),
+                nn.BatchNorm1d(128),
+                nn.ReLU(),
+                nn.Dropout(0.20),
+                nn.MaxPool1d(2),
+                nn.Conv1d(128, 128, kernel_size=5, padding=2),
+                nn.BatchNorm1d(128),
+                nn.ReLU(),
+                nn.AdaptiveAvgPool1d(1),
+            )
+            head_in = 128
+        else:
+            raise ValueError("variant must be 'small' or 'improved'")
         self.classifier = nn.Sequential(
             nn.Flatten(),
             nn.Dropout(0.2),
-            nn.Linear(128, n_classes),
+            nn.Linear(head_in, n_classes),
         )
 
     def set_normalization(self, mean, std):

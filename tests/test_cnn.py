@@ -13,6 +13,36 @@ def test_har_1d_cnn_forward_shape():
     assert logits.shape == (4, 6)
 
 
+def test_fit_sequence_normalizer_uses_train_statistics():
+    from model.cnn import SequenceNormalizer
+
+    train = np.array(
+        [
+            [[1.0, 10.0], [3.0, 14.0]],
+            [[5.0, 18.0], [7.0, 22.0]],
+        ],
+        dtype=np.float32,
+    )
+    test = np.array([[[9.0, 26.0]]], dtype=np.float32)
+
+    normalizer = SequenceNormalizer.fit(train)
+    normalized_train = normalizer.transform(train)
+    normalized_test = normalizer.transform(test)
+
+    np.testing.assert_allclose(normalized_train.mean(axis=(0, 1)), [0.0, 0.0], atol=1e-6)
+    np.testing.assert_allclose(normalized_train.std(axis=(0, 1)), [1.0, 1.0], atol=1e-6)
+    assert normalized_test.shape == test.shape
+
+
+def test_har_1d_cnn_improved_variant_forward_shape():
+    model = HAR1DCNN(n_channels=6, n_classes=6, variant="improved")
+    batch = torch.randn(4, 300, 6)
+
+    logits = model(batch)
+
+    assert logits.shape == (4, 6)
+
+
 def test_train_cnn_candidate_returns_validation_metrics():
     rng = np.random.default_rng(42)
     X = rng.normal(size=(18, 20, 6)).astype(np.float32)
