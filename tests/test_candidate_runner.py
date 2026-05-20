@@ -91,3 +91,17 @@ def test_daily_mode_dispatches_new_tree_candidates(monkeypatch):
         ("xgb_macro_smote_refresh", True, "f1_macro"),
     ]
     assert [row["name"] for row in results] == runner.daily_tree_candidate_names()
+
+
+def test_daily_mode_smoke_is_directly_executable():
+    result = subprocess.run(
+        [sys.executable, "scripts/run_balanced_candidates.py", "--smoke", "--daily-20260520"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert "lgb_macro_smote_refresh" in result.stdout
+    assert "xgb_macro_smote_refresh" in result.stdout
+    assert "cnn_improved_sequence" in result.stdout

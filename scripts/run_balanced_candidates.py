@@ -279,25 +279,28 @@ def main():
     X_train, y_train, train_ids, users = _limit_by_user(X_train, train_ids, users, y_train, args.per_user_limit)
     X_test, test_ids, test_users = _limit_by_user(X_test, test_ids, test_users, per_user_limit=args.per_user_limit)
 
-    results = [
-        _run_lgb_candidate("lgb_acc_no_smote", X_train, y_train, users, X_test, test_ids, args, use_smote=False),
-        _run_lgb_candidate("lgb_acc_smote", X_train, y_train, users, X_test, test_ids, args, use_smote=True),
-    ]
+    if args.daily_20260520:
+        results = _run_daily_tree_candidates(X_train, y_train, users, X_test, test_ids, args)
+    else:
+        results = [
+            _run_lgb_candidate("lgb_acc_no_smote", X_train, y_train, users, X_test, test_ids, args, use_smote=False),
+            _run_lgb_candidate("lgb_acc_smote", X_train, y_train, users, X_test, test_ids, args, use_smote=True),
+        ]
 
-    if args.include_xgb:
-        results.append(
-            _run_xgb_candidate(
-                "xgb_acc_no_smote",
-                X_train,
-                y_train,
-                users,
-                X_test,
-                test_ids,
-                args,
-                use_smote=False,
-                metric="accuracy",
+        if args.include_xgb:
+            results.append(
+                _run_xgb_candidate(
+                    "xgb_acc_no_smote",
+                    X_train,
+                    y_train,
+                    users,
+                    X_test,
+                    test_ids,
+                    args,
+                    use_smote=False,
+                    metric="accuracy",
+                )
             )
-        )
 
     print(f"\nLoading sequence data from {train_path} and {test_path}...")
     X_seq, y_seq, seq_ids, seq_users = load_train_sequences(train_path)
@@ -309,7 +312,22 @@ def main():
         seq_test_users,
         per_user_limit=args.per_user_limit,
     )
-    results.append(_run_cnn_candidate(X_seq, y_seq.to_numpy(), seq_users.to_numpy(), X_test_seq, seq_test_ids, args))
+    cnn_name = "cnn_improved_sequence" if args.daily_20260520 else "cnn_raw_sequence"
+    cnn_variant = "improved" if args.daily_20260520 else "small"
+    cnn_normalize = bool(args.daily_20260520)
+    results.append(
+        _run_cnn_candidate(
+            X_seq,
+            y_seq.to_numpy(),
+            seq_users.to_numpy(),
+            X_test_seq,
+            seq_test_ids,
+            args,
+            name=cnn_name,
+            variant=cnn_variant,
+            normalize=cnn_normalize,
+        )
+    )
 
     _print_summary(results)
 
