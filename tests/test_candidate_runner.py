@@ -197,3 +197,17 @@ def test_runner_script_help_includes_plateau_mode():
 
     assert "--plateau-20260520" in result.stdout
     assert "--rocket-kernels" in result.stdout
+
+
+def test_plateau_mode_smoke_is_directly_executable():
+    result = subprocess.run(
+        [sys.executable, "scripts/run_balanced_candidates.py", "--smoke", "--plateau-20260520"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert "xgb_final_fit_audit" in result.stdout
+    assert "xgb_targeted_temporal" in result.stdout
+    assert "rocket_sequence" in result.stdout
