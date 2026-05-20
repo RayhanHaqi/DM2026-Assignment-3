@@ -178,8 +178,8 @@ def _run_daily_tree_candidates(X_train, y_train, users, X_test, test_ids, args):
     ]
 
 
-def _run_cnn_candidate(X_seq, y, users, X_test_seq, test_ids, args):
-    print("\nTraining cnn_raw_sequence...")
+def _run_cnn_candidate(X_seq, y, users, X_test_seq, test_ids, args, name="cnn_raw_sequence", variant="small", normalize=False):
+    print(f"\nTraining {name}...")
     result = train_cnn_candidate(
         X_seq,
         y,
@@ -189,6 +189,8 @@ def _run_cnn_candidate(X_seq, y, users, X_test_seq, test_ids, args):
         patience=args.cnn_patience,
         device=args.device,
         seed=args.seed,
+        variant=variant,
+        normalize=normalize,
     )
     full_epochs = max(1, result.best_epoch)
     model = fit_cnn_full(
@@ -198,20 +200,22 @@ def _run_cnn_candidate(X_seq, y, users, X_test_seq, test_ids, args):
         batch_size=args.cnn_batch_size,
         device=args.device,
         seed=args.seed,
+        variant=variant,
+        normalize=normalize,
     )
-    preds = predict_cnn(model, X_test_seq, device=args.device)
+    preds = predict_cnn(model, X_test_seq, device=args.device, normalize=normalize)
     path = _write_submission(
-        "cnn_raw_sequence",
+        name,
         test_ids,
         preds,
         args.output_dir,
         args.no_submit,
         model="1D CNN",
         features="raw 300x6 sequence",
-        notes=f"epochs={full_epochs}; validation from grouped split",
+        notes=f"variant={variant}; normalize={normalize}; epochs={full_epochs}; validation from grouped split",
     )
     return {
-        "name": "cnn_raw_sequence",
+        "name": name,
         "accuracy": result.accuracy,
         "accuracy_std": 0.0,
         "f1_macro": result.f1_macro,

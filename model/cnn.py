@@ -153,7 +153,18 @@ def _train_epochs(model, X, y, epochs, batch_size, device, lr=1e-3, patience=Non
     return best_epoch
 
 
-def train_cnn_candidate(X, y, groups, epochs=30, batch_size=128, patience=5, device=None, seed=42):
+def train_cnn_candidate(
+    X,
+    y,
+    groups,
+    epochs=30,
+    batch_size=128,
+    patience=5,
+    device=None,
+    seed=42,
+    variant="small",
+    normalize=False,
+):
     _seed_everything(seed)
     device = _device(device)
     X = np.asarray(X, dtype=np.float32)
@@ -165,13 +176,31 @@ def train_cnn_candidate(X, y, groups, epochs=30, batch_size=128, patience=5, dev
     X_train, X_val = X[train_idx], X[val_idx]
     y_train, y_val = y[train_idx], y[val_idx]
 
-    mean = X_train.mean(axis=(0, 1))
-    std = X_train.std(axis=(0, 1))
-    model = HAR1DCNN(n_features=X.shape[2], n_classes=6)
-    model.set_normalization(mean, std)
-    best_epoch = _train_epochs(model, X_train, y_train, epochs, batch_size, device, patience=patience, X_val=X_val, y_val=y_val)
+    normalizer = None
+    X_train_fit = X_train
+    X_val_fit = X_val
+    if normalize:
+        normalizer = SequenceNormalizer.fit(X_train_fit)
+        X_train_fit = normalizer.transform(X_train_fit)
+        X_val_fit = normalizer.transform(X_val_fit)
 
-    preds = predict_cnn(model, X_val, device=device)
+    model = HAR1DCNN(n_features=X.shape[2], n_classes=6, variant=variant)
+    if not normalize:
+        model.set_normalization(X_train.mean(axis=(0, 1)), X_train.std(axis=(0, 1)))
+    model.sequence_normalizer = normalizer
+    best_epoch = _train_epochs(
+        model,
+        X_train_fit,
+        y_train,
+        epochs,
+        batch_size,
+        device,
+        patience=patience,
+        X_val=X_val_fit,
+        y_val=y_val,
+    )
+
+    preds = predict_cnn(model, X_val_fit, device=device)
     return CnnResult(
         model=model.cpu(),
         accuracy=accuracy_score(y_val, preds),
@@ -180,22 +209,34 @@ def train_cnn_candidate(X, y, groups, epochs=30, batch_size=128, patience=5, dev
     )
 
 
-def fit_cnn_full(X, y, epochs=30, batch_size=128, device=None, seed=42):
+def fit_cnn_full(X, y, epochs=30, batch_size=128, device=None, seed=42, variant="small", normalize=False):
     _seed_everything(seed)
     device = _device(device)
     X = np.asarray(X, dtype=np.float32)
     y = np.asarray(y, dtype=np.int64)
-    model = HAR1DCNN(n_features=X.shape[2], n_classes=6)
-    model.set_normalization(X.mean(axis=(0, 1)), X.std(axis=(0, 1)))
-    _train_epochs(model, X, y, epochs, batch_size, device)
+    normalizer = None
+    X_fit = X
+    if normalize:
+        normalizer = SequenceNormalizer.fit(X_fit)
+        X_fit = normalizer.transform(X_fit)
+    model = HAR1DCNN(n_features=X.shape[2], n_classes=6, variant=variant)
+    if not normalize:
+        model.set_normalization(X.mean(axis=(0, 1)), X.std(axis=(0, 1)))
+    model.sequence_normalizer = normalizer
+    _train_epochs(model, X_fit, y, epochs, batch_size, device)
     return model.cpu()
 
 
-def predict_cnn(model, X, batch_size=512, device=None):
+def predict_cnn(model, X, batch_size=512, device=None, normalize=False):
     device = _device(device)
     model = model.to(device)
     model.eval()
     X = np.asarray(X, dtype=np.float32)
+    if normalize:
+        normalizer = getattr(model, "sequence_normalizer", None)
+        if normalizer is None:
+            raise ValueError("normalize=True requires a model fitted with normalize=True")
+        X = normalizer.transform(X)
     preds = []
     with torch.no_grad():
         for start in range(0, len(X), batch_size):

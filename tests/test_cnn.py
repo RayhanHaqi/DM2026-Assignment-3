@@ -77,3 +77,14 @@ def test_fit_cnn_full_returns_model_that_predicts():
 
     assert preds.shape == (2,)
     assert set(preds.tolist()) <= {0, 1, 2, 3, 4, 5}
+
+
+def test_fit_cnn_full_improved_variant_normalizes_and_predicts():
+    X = np.random.default_rng(3).normal(size=(12, 30, 6)).astype(np.float32)
+    y = np.array([0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5])
+
+    model = fit_cnn_full(X, y, epochs=1, batch_size=6, device="cpu", seed=3, variant="improved", normalize=True)
+    preds = predict_cnn(model, X, device="cpu", normalize=True)
+
+    assert preds.shape == (12,)
+    assert set(preds.tolist()) <= {0, 1, 2, 3, 4, 5}
