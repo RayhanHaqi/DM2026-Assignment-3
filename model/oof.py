@@ -65,8 +65,16 @@ def evaluate_oof_model(model, X, y, groups, X_test, n_splits=5, use_smote=False,
 
         fold_model = clone(model)
         fold_model.fit(X_train_scaled, y_train)
-        val_proba = fold_model.predict_proba(X_val_scaled)
-        test_proba = fold_model.predict_proba(X_test_scaled)
+        val_proba_raw = fold_model.predict_proba(X_val_scaled)
+        test_proba_raw = fold_model.predict_proba(X_test_scaled)
+        fold_classes = fold_model.classes_
+        val_proba = np.zeros((len(val_proba_raw), len(classes)), dtype=float)
+        test_proba = np.zeros((len(test_proba_raw), len(classes)), dtype=float)
+        for slot, c in enumerate(fold_classes):
+            if c in classes:
+                idx = np.where(classes == c)[0][0]
+                val_proba[:, idx] = val_proba_raw[:, slot]
+                test_proba[:, idx] = test_proba_raw[:, slot]
         oof_proba[val_idx] = val_proba
         test_proba_folds.append(test_proba)
 
