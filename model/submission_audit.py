@@ -20,6 +20,19 @@ from model.validation import (
 VALID_LABELS = (0, 1, 2, 3, 4, 5)
 SCORE_PATTERN = re.compile(r"(\d+\.\d+)")
 
+# Known-failed motifs from public ablations — block even when OOF looks good.
+DENYLIST_FILENAME_PATTERNS = (
+    "user_norm",
+    "_ft_sub_",
+    "ft_sub_",
+    "noise_0.",
+    "xgb_blend",
+    "gbdt_blend",
+    "oof_stacking",
+    "prob_ensemble",
+    "gbdt_cache_blend",
+)
+
 
 @dataclass
 class TrackerEntry:
@@ -102,6 +115,52 @@ def class2_count(labels: np.ndarray) -> int:
     return int((labels == 2).sum())
 
 
+def matches_denylist(filename: str) -> bool:
+    name = filename.lower()
+    return any(pattern in name for pattern in DENYLIST_FILENAME_PATTERNS)
+
+
+def build_md5_index(
+    submission_paths: list[Path],
+    *,
+    expected_len: int | None = None,
+) -> dict[str, str]:
+    """Map full MD5 hex digest -> filename for local submission CSVs."""
+    index: dict[str, str] = {}
+    for path in submission_paths:
+        if not path.exists():
+            continue
+        try:
+            labels = load_labels(path)
+        except (ValueError, OSError):
+            continue
+        if len(labels) == 0:
+            continue
+        if expected_len is not None and len(labels) != expected_len:
+            continue
+        index[md5_file(path)] = path.name
+    return index
+
+
+def load_labels_index(
+    submission_paths: list[Path],
+    *,
+    expected_len: int,
+) -> dict[str, np.ndarray]:
+    """Load labels for full-size submissions only (skip smoke/partial CSVs)."""
+    all_labels: dict[str, np.ndarray] = {}
+    for path in submission_paths:
+        if not path.exists():
+            continue
+        try:
+            labels = load_labels(path)
+        except (ValueError, OSError):
+            continue
+        if len(labels) == expected_len:
+            all_labels[path.name] = labels
+    return all_labels
+
+
 def class2_range_from_good_submissions(
     submission_paths: list[Path],
     min_good_score: float,
@@ -142,8 +201,12 @@ def audit_submission(
     min_shift_pct: float,
     all_labels: dict[str, np.ndarray],
     max_near_dup_shift_pct: float = 0.3,
-) -> SubmissionAuditRow:
+    max_shift_pct: float = 10.0,
+    md5_index: dict[str, str] | None = None,
+) -> SubmissionAuditRow | None:
     labels = load_labels(candidate_path)
+    if len(labels) != len(baseline_labels):
+        return None
     md5 = md5_file(candidate_path)
     shift = prediction_shift(labels, baseline_labels)
     cand_dist = prediction_distribution(labels)
@@ -177,8 +240,24 @@ def audit_submission(
         nearest_shift_pct=nearest_shift,
     )
 
+    if matches_denylist(candidate_path.name):
+        _append_block(
+            row,
+            f"filename matches denylist motif ({candidate_path.name})",
+            "DENYLIST",
+        )
+
     if md5 == baseline_md5:
         _append_block(row, "exact MD5 duplicate of baseline", "BASELINE_DUPLICATE")
+
+    if md5_index:
+        other_name = md5_index.get(md5)
+        if other_name and other_name != candidate_path.name:
+            _append_block(
+                row,
+                f"exact MD5 duplicate of {other_name}",
+                "MD5_DUPLICATE",
+            )
 
     if md5 != baseline_md5 and is_near_duplicate_predictions(
         labels, baseline_labels, max_shift_pct=max_near_dup_shift_pct
@@ -190,7 +269,18 @@ def audit_submission(
         )
 
     if shift.percent < min_shift_pct:
-        row.flags.append("LOW_SHIFT")
+        _append_block(
+            row,
+            f"shift {shift.percent:.2f}% below minimum {min_shift_pct:.2f}%",
+            "LOW_SHIFT",
+        )
+
+    if shift.percent > max_shift_pct:
+        _append_block(
+            row,
+            f"shift {shift.percent:.2f}% above maximum {max_shift_pct:.2f}%",
+            "HIGH_SHIFT",
+        )
 
     if class2_range is not None:
         low, high = class2_range
@@ -217,13 +307,7 @@ def audit_submission(
         and other_entry.md5_prefix == row.md5_prefix
     ]
     if collision_names:
-        row.flags.append("TRACKER_MD5_COLLISION")
-        if md5 != baseline_md5:
-            _append_block(
-                row,
-                f"MD5 prefix matches tracker: {', '.join(collision_names[:5])}",
-                "DUPLICATE_MD5",
-            )
+        row.flags.append("TRACKER_MD5_PREFIX_COLLISION")
 
     if md5 != baseline_md5:
         for other_name, other_labels in all_labels.items():
@@ -250,7 +334,8 @@ def audit_all_submissions(
     *,
     best_public_score: float = 0.7830,
     min_good_score: float = 0.7780,
-    min_shift_pct: float = 2.0,
+    min_shift_pct: float = 1.0,
+    max_shift_pct: float = 10.0,
     max_near_dup_shift_pct: float = 0.3,
 ) -> tuple[list[SubmissionAuditRow], dict, tuple[int, int] | None]:
     tracker = parse_submissions_tracker(tracker_path)
@@ -258,9 +343,8 @@ def audit_all_submissions(
     baseline_md5 = md5_file(baseline_path)
     baseline_dist = prediction_distribution(baseline_labels)
 
-    all_labels: dict[str, np.ndarray] = {}
-    for path in submission_paths:
-        all_labels[path.name] = load_labels(path)
+    expected_len = len(baseline_labels)
+    all_labels = load_labels_index(submission_paths, expected_len=expected_len)
 
     class2_range = class2_range_from_good_submissions(
         submission_paths, min_good_score=min_good_score, tracker=tracker
@@ -268,24 +352,28 @@ def audit_all_submissions(
     if class2_range is None:
         class2_range = (class2_count(baseline_labels), class2_count(baseline_labels))
 
+    md5_index = build_md5_index(submission_paths, expected_len=expected_len)
+
     rows: list[SubmissionAuditRow] = []
     for path in submission_paths:
         if path.resolve() == baseline_path.resolve():
             continue
-        rows.append(
-            audit_submission(
-                path,
-                baseline_labels,
-                baseline_md5,
-                baseline_dist,
-                tracker,
-                best_public_score=best_public_score,
-                class2_range=class2_range,
-                min_shift_pct=min_shift_pct,
-                all_labels=all_labels,
-                max_near_dup_shift_pct=max_near_dup_shift_pct,
-            )
+        row = audit_submission(
+            path,
+            baseline_labels,
+            baseline_md5,
+            baseline_dist,
+            tracker,
+            best_public_score=best_public_score,
+            class2_range=class2_range,
+            min_shift_pct=min_shift_pct,
+            all_labels=all_labels,
+            max_near_dup_shift_pct=max_near_dup_shift_pct,
+            max_shift_pct=max_shift_pct,
+            md5_index=md5_index,
         )
+        if row is not None:
+            rows.append(row)
 
     meta = {
         "baseline": str(baseline_path),
@@ -294,8 +382,51 @@ def audit_all_submissions(
         "class2_range": class2_range,
         "best_public_score": best_public_score,
         "min_shift_pct": min_shift_pct,
+        "max_shift_pct": max_shift_pct,
     }
     return rows, meta, class2_range
+
+
+def gate_submission(
+    candidate_path: Path,
+    baseline_path: Path,
+    tracker_path: Path,
+    output_dir: Path,
+    *,
+    best_public_score: float = 0.7830,
+    min_good_score: float = 0.7780,
+    min_shift_pct: float = 1.0,
+    max_shift_pct: float = 10.0,
+    max_near_dup_shift_pct: float = 0.3,
+) -> SubmissionAuditRow:
+    """Run Phase-0 gates on one candidate CSV. Raises if row count mismatches baseline."""
+    submission_paths = sorted(output_dir.glob("submission_*.csv"))
+    if candidate_path not in submission_paths:
+        submission_paths = sorted(set(submission_paths + [candidate_path]))
+    tracker = parse_submissions_tracker(tracker_path)
+    baseline_labels = load_labels(baseline_path)
+    expected_len = len(baseline_labels)
+    all_labels = load_labels_index(submission_paths, expected_len=expected_len)
+    all_labels[candidate_path.name] = load_labels(candidate_path)
+    row = audit_submission(
+        candidate_path,
+        baseline_labels,
+        md5_file(baseline_path),
+        prediction_distribution(baseline_labels),
+        tracker,
+        best_public_score=best_public_score,
+        class2_range=resolve_class2_range(
+            submission_paths, tracker_path, baseline_labels, min_good_score=min_good_score
+        ),
+        min_shift_pct=min_shift_pct,
+        all_labels=all_labels,
+        max_near_dup_shift_pct=max_near_dup_shift_pct,
+        max_shift_pct=max_shift_pct,
+        md5_index=build_md5_index(submission_paths, expected_len=expected_len),
+    )
+    if row is None:
+        raise ValueError(f"{candidate_path} row count does not match baseline")
+    return row
 
 
 def shift_vs_reference(candidate_labels: np.ndarray, reference_labels: np.ndarray) -> float:

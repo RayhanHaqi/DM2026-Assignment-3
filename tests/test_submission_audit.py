@@ -7,6 +7,7 @@ import pandas as pd
 from model.submission_audit import (
     audit_submission,
     class2_count,
+    matches_denylist,
     parse_kaggle_score,
     parse_submissions_tracker,
 )
@@ -126,6 +127,85 @@ def test_audit_submission_blocks_near_duplicate(tmp_path):
     )
     assert row.block_submit
     assert "NEAR_DUPLICATE" in row.flags
+
+
+def test_audit_submission_blocks_low_and_high_shift(tmp_path):
+    labels = np.array([0, 1, 2, 3, 4, 5] * 200)
+    baseline_path = tmp_path / "baseline.csv"
+    low_path = tmp_path / "submission_low.csv"
+    high_path = tmp_path / "submission_high.csv"
+    _write_submission(baseline_path, labels)
+    low = labels.copy()
+    low[0] = (low[0] + 1) % 6
+    _write_submission(low_path, low)
+    high = labels.copy()
+    high[:150] = (high[:150] + 1) % 6
+    _write_submission(high_path, high)
+
+    tracker = {}
+    baseline_labels = labels
+    baseline_md5 = hashlib.md5(baseline_path.read_bytes()).hexdigest()
+    baseline_dist = {i: int((labels == i).sum()) for i in range(6)}
+
+    low_row = audit_submission(
+        low_path,
+        baseline_labels,
+        baseline_md5,
+        baseline_dist,
+        tracker,
+        best_public_score=0.7830,
+        class2_range=(class2_count(labels), class2_count(labels)),
+        min_shift_pct=1.0,
+        all_labels={baseline_path.name: labels, low_path.name: low, high_path.name: high},
+        max_near_dup_shift_pct=0.3,
+        max_shift_pct=10.0,
+    )
+    assert low_row.block_submit
+    assert "LOW_SHIFT" in low_row.flags
+
+    high_row = audit_submission(
+        high_path,
+        baseline_labels,
+        baseline_md5,
+        baseline_dist,
+        tracker,
+        best_public_score=0.7830,
+        class2_range=(class2_count(labels), class2_count(labels)),
+        min_shift_pct=1.0,
+        all_labels={baseline_path.name: labels, low_path.name: low, high_path.name: high},
+        max_near_dup_shift_pct=0.3,
+        max_shift_pct=10.0,
+    )
+    assert high_row.block_submit
+    assert "HIGH_SHIFT" in high_row.flags
+
+
+def test_audit_submission_blocks_denylist_filename(tmp_path):
+    labels = np.array([0, 1, 2, 3, 4, 5] * 50)
+    baseline_path = tmp_path / "baseline.csv"
+    deny_path = tmp_path / "submission_tabpfn_v3_user_norm_20260605.csv"
+    _write_submission(baseline_path, labels)
+    shifted = labels.copy()
+    shifted[:40] = (shifted[:40] + 1) % 6
+    _write_submission(deny_path, shifted)
+
+    baseline_md5 = hashlib.md5(baseline_path.read_bytes()).hexdigest()
+    baseline_dist = {i: int((labels == i).sum()) for i in range(6)}
+    row = audit_submission(
+        deny_path,
+        labels,
+        baseline_md5,
+        baseline_dist,
+        {},
+        best_public_score=0.7830,
+        class2_range=(class2_count(labels), class2_count(labels)),
+        min_shift_pct=1.0,
+        all_labels={baseline_path.name: labels, deny_path.name: shifted},
+        max_shift_pct=10.0,
+    )
+    assert matches_denylist(deny_path.name)
+    assert row.block_submit
+    assert "DENYLIST" in row.flags
 
 
 def test_evaluate_submit_gates_requires_oof_margin_and_shift():
