@@ -92,6 +92,10 @@ setup(
         "optuna",
         "matplotlib",
         "seaborn",
+        "catboost",
+        "sktime",
+        "aeon",
+        "pycatch22",
     ],
     cmdclass={
         "install": InstallWithData,

@@ -72,8 +72,10 @@ class TabPFNOOFResult:
     oof_macro_f1: float
     fold_accuracies: list[float]
     oof_preds: np.ndarray
+    oof_proba: np.ndarray
     test_preds: np.ndarray
     test_proba: np.ndarray
+    classes: np.ndarray
     confusion: dict
     prediction_distribution: dict
     member_seeds: list[int] | None = None
@@ -183,8 +185,10 @@ def tabpfn_oof_predict(
         oof_macro_f1=float(f1_score(y_arr, oof_preds, average="macro", zero_division=0)),
         fold_accuracies=fold_accuracies,
         oof_preds=oof_preds,
+        oof_proba=oof_proba,
         test_preds=test_preds,
         test_proba=test_proba,
+        classes=classes,
         confusion=confusion_matrix_dict(y_arr, oof_preds),
         prediction_distribution=prediction_distribution(test_preds),
     )
@@ -300,8 +304,10 @@ def tabpfn_prob_ensemble_predict(
         oof_macro_f1=float(f1_score(y_arr, oof_preds, average="macro", zero_division=0)),
         fold_accuracies=fold_accuracies,
         oof_preds=oof_preds,
+        oof_proba=oof_proba,
         test_preds=test_preds,
         test_proba=test_proba,
+        classes=classes,
         confusion=confusion_matrix_dict(y_arr, oof_preds),
         prediction_distribution=prediction_distribution(test_preds),
         member_seeds=seeds,

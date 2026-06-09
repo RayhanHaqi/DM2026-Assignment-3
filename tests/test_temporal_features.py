@@ -1,7 +1,12 @@
 import numpy as np
 import pandas as pd
 
-from model.temporal_features import build_targeted_temporal_features, combine_base_and_temporal_features
+from model.temporal_features import (
+    build_spectral_window_features,
+    build_targeted_temporal_features,
+    combine_base_and_temporal_features,
+    combine_base_temporal_spectral_features,
+)
 
 
 def test_build_targeted_temporal_features_has_expected_columns():
@@ -48,3 +53,26 @@ def test_combine_base_and_temporal_features_preserves_base_columns_first():
     assert list(combined.columns[:2]) == ["base_a", "base_b"]
     assert len(combined) == 2
     assert combined.shape[1] > base.shape[1]
+
+
+def test_build_spectral_window_features_shape_and_finite():
+    X_seq = np.sin(np.linspace(0, 8 * np.pi, 2 * 60 * 6, dtype=np.float32)).reshape(2, 60, 6)
+
+    features = build_spectral_window_features(X_seq)
+
+    assert features.shape[0] == 2
+    assert features.shape[1] == 6 * 7
+    assert features.columns.tolist()[0].startswith("fft_mean_x__")
+    assert np.isfinite(features.to_numpy()).all()
+
+
+def test_combine_base_temporal_spectral_extends_feature_count():
+    base = pd.DataFrame({"base_a": [1.0, 2.0]})
+    X_seq = np.ones((2, 12, 6), dtype=np.float32)
+
+    temporal_only = combine_base_and_temporal_features(base, X_seq)
+    full = combine_base_temporal_spectral_features(base, X_seq)
+
+    assert full.shape[0] == 2
+    assert full.shape[1] > temporal_only.shape[1]
+    assert list(full.columns[:1]) == ["base_a"]

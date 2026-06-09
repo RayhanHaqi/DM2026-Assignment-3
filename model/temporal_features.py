@@ -51,3 +51,51 @@ def build_targeted_temporal_features(X_seq):
 def combine_base_and_temporal_features(X_base, X_seq):
     temporal = build_targeted_temporal_features(X_seq)
     return pd.concat([X_base.reset_index(drop=True), temporal], axis=1)
+
+
+def _spectral_entropy(power):
+    total = float(power.sum())
+    if total <= 1e-12:
+        return 0.0
+    probs = power / total
+    probs = probs[probs > 1e-12]
+    return float(-(probs * np.log(probs)).sum())
+
+
+def _band_energy(power, start_frac, end_frac):
+    n = len(power)
+    start = int(n * start_frac)
+    end = max(start + 1, int(n * end_frac))
+    return float(power[start:end].sum())
+
+
+def build_spectral_window_features(X_seq):
+    """Compact FFT-derived tabular features (WISDM-style spectral cues, fixed-size)."""
+    X_seq = np.asarray(X_seq, dtype=np.float32)
+    rows = []
+    for sample in X_seq:
+        row = {}
+        for col_i, col in enumerate(FEATURE_COLS):
+            signal = sample[:, col_i]
+            power = np.abs(np.fft.rfft(signal)) ** 2
+            if power.size == 0:
+                power = np.array([0.0], dtype=np.float32)
+            dominant = int(np.argmax(power))
+            row[f"fft_{col}__dom_bin"] = float(dominant / max(len(power) - 1, 1))
+            row[f"fft_{col}__dom_power"] = float(power[dominant])
+            row[f"fft_{col}__total_power"] = float(power.sum())
+            row[f"fft_{col}__entropy"] = _spectral_entropy(power)
+            row[f"fft_{col}__low_band"] = _band_energy(power, 0.0, 0.25)
+            row[f"fft_{col}__mid_band"] = _band_energy(power, 0.25, 0.75)
+            row[f"fft_{col}__high_band"] = _band_energy(power, 0.75, 1.0)
+        rows.append(row)
+    return pd.DataFrame(rows).replace([np.inf, -np.inf], 0.0).fillna(0.0).reset_index(drop=True)
+
+
+def combine_base_temporal_spectral_features(X_base, X_seq):
+    temporal = build_targeted_temporal_features(X_seq)
+    spectral = build_spectral_window_features(X_seq)
+    return pd.concat(
+        [X_base.reset_index(drop=True), temporal, spectral],
+        axis=1,
+    )

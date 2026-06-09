@@ -1,3 +1,4 @@
+AGENTS.md
 .ipynb_checkpoints
 */.ipynb_checkpoints/*
 *__pycache__/
@@ -9,6 +10,7 @@
 *.pptx.txt
 *.png
 data/
+kaggle.json
 output/
 build/
 *.egg-info/

@@ -208,6 +208,38 @@ def test_audit_submission_blocks_denylist_filename(tmp_path):
     assert "DENYLIST" in row.flags
 
 
+def test_audit_submission_confidence_gate_blocks_high_confidence_bulk_shift(tmp_path):
+    labels = np.array([0, 1, 2, 3, 4, 5] * 50)
+    baseline_path = tmp_path / "baseline.csv"
+    cand_path = tmp_path / "candidate.csv"
+    _write_submission(baseline_path, labels)
+    shifted = labels.copy()
+    shifted[10:40] = (shifted[10:40] + 1) % 6
+    _write_submission(cand_path, shifted)
+
+    proba = np.full((len(labels), 6), 1.0 / 6.0)
+    proba[10:40] = [0.90, 0.02, 0.02, 0.02, 0.02, 0.02]
+
+    baseline_md5 = hashlib.md5(baseline_path.read_bytes()).hexdigest()
+    baseline_dist = {i: int((labels == i).sum()) for i in range(6)}
+    row = audit_submission(
+        cand_path,
+        labels,
+        baseline_md5,
+        baseline_dist,
+        {},
+        best_public_score=0.7830,
+        class2_range=(class2_count(labels), class2_count(labels)),
+        min_shift_pct=1.0,
+        all_labels={baseline_path.name: labels, cand_path.name: shifted},
+        max_shift_pct=10.0,
+        baseline_proba=proba,
+        min_changed_low_conf_frac=0.70,
+    )
+    assert row.block_submit
+    assert "LOW_CONFIDENCE_SHIFT" in row.flags
+
+
 def test_evaluate_submit_gates_requires_oof_margin_and_shift():
     baseline_preds = np.array([0, 1, 2, 3, 4, 5] * 20)
     candidate_preds = baseline_preds.copy()

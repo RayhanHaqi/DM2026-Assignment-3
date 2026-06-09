@@ -16,6 +16,7 @@ from model.validation import (
     prediction_distribution,
     prediction_shift,
 )
+from model.v3_diagnostics import diagnose_vs_v3, passes_confidence_shift_gate
 
 VALID_LABELS = (0, 1, 2, 3, 4, 5)
 SCORE_PATTERN = re.compile(r"(\d+\.\d+)")
@@ -203,6 +204,9 @@ def audit_submission(
     max_near_dup_shift_pct: float = 0.3,
     max_shift_pct: float = 10.0,
     md5_index: dict[str, str] | None = None,
+    baseline_proba: np.ndarray | None = None,
+    min_changed_low_conf_frac: float | None = 0.70,
+    max_single_class_delta_pp: float = 1.5,
 ) -> SubmissionAuditRow | None:
     labels = load_labels(candidate_path)
     if len(labels) != len(baseline_labels):
@@ -324,6 +328,20 @@ def audit_submission(
     if tracker_score is None:
         row.flags.append("UNSCORED")
 
+    if baseline_proba is not None and min_changed_low_conf_frac is not None:
+        diag = diagnose_vs_v3(baseline_labels, baseline_proba, labels)
+        ok, conf_reasons = passes_confidence_shift_gate(
+            diag,
+            min_changed_low_conf_frac=min_changed_low_conf_frac,
+            max_single_class_delta_pp=max_single_class_delta_pp,
+        )
+        row.flags.append(
+            f"changed_low_conf={diag.changed_low_confidence_frac:.2f}"
+        )
+        if not ok:
+            for reason in conf_reasons:
+                _append_block(row, reason, "LOW_CONFIDENCE_SHIFT")
+
     return row
 
 
@@ -398,6 +416,10 @@ def gate_submission(
     min_shift_pct: float = 1.0,
     max_shift_pct: float = 10.0,
     max_near_dup_shift_pct: float = 0.3,
+    baseline_proba: np.ndarray | None = None,
+    min_changed_low_conf_frac: float | None = 0.70,
+    max_single_class_delta_pp: float = 1.5,
+    class2_range: tuple[int, int] | None | str = "auto",
 ) -> SubmissionAuditRow:
     """Run Phase-0 gates on one candidate CSV. Raises if row count mismatches baseline."""
     submission_paths = sorted(output_dir.glob("submission_*.csv"))
@@ -415,14 +437,21 @@ def gate_submission(
         prediction_distribution(baseline_labels),
         tracker,
         best_public_score=best_public_score,
-        class2_range=resolve_class2_range(
-            submission_paths, tracker_path, baseline_labels, min_good_score=min_good_score
+        class2_range=(
+            resolve_class2_range(
+                submission_paths, tracker_path, baseline_labels, min_good_score=min_good_score
+            )
+            if class2_range == "auto"
+            else class2_range
         ),
         min_shift_pct=min_shift_pct,
         all_labels=all_labels,
         max_near_dup_shift_pct=max_near_dup_shift_pct,
         max_shift_pct=max_shift_pct,
         md5_index=build_md5_index(submission_paths, expected_len=expected_len),
+        baseline_proba=baseline_proba,
+        min_changed_low_conf_frac=min_changed_low_conf_frac,
+        max_single_class_delta_pp=max_single_class_delta_pp,
     )
     if row is None:
         raise ValueError(f"{candidate_path} row count does not match baseline")

@@ -26,7 +26,12 @@ from model.sequence import load_test_sequences, load_train_sequences
 from model.tabpfn_model import tabpfn_oof_predict
 from model.temporal_features import combine_base_and_temporal_features
 from model.utils import generate_submission, load_test_data, load_train_data
-from model.validation import evaluate_paired_oof_gate, evaluate_submit_gates, prediction_shift
+from model.validation import (
+    evaluate_paired_oof_gate,
+    evaluate_submit_gates,
+    prediction_shift,
+    smoke_slice_by_users,
+)
 
 VALID_LABELS = {0, 1, 2, 3, 4, 5}
 DEFAULT_BASELINE = ROOT / "output" / "submission_tabpfn_v3_20260601_180045_01.csv"
@@ -64,6 +69,9 @@ def _load_baseline_preds(baseline_path, test_ids):
 
 
 def _budget_full(written, args):
+    """True when no more CSV writes are allowed this run."""
+    if args.max_submissions <= 0:
+        return False
     return len(written) >= args.max_submissions
 
 
@@ -113,6 +121,8 @@ def _run_candidate(
         f"  {name}: OOF acc={result.oof_accuracy:.4f} f1={result.oof_macro_f1:.4f} "
         f"shift={shift.percent:.2f}% md5={md5} gate={'PASS' if submit_ok else 'SKIP'} ({gate_msg})"
     )
+    if args.max_submissions <= 0 or args.smoke:
+        return None
     if not submit_ok and not args.force:
         return None
     notes = (
@@ -137,6 +147,12 @@ def main():
     parser.add_argument("--force", action="store_true", help="Write CSV even when gates fail")
     parser.add_argument("--smoke", action="store_true")
     parser.add_argument(
+        "--smoke-users",
+        type=int,
+        default=6,
+        help="Number of train users to keep in --smoke mode (need >= n_splits)",
+    )
+    parser.add_argument(
         "--max-submissions",
         type=int,
         default=2,
@@ -159,13 +175,18 @@ def main():
     X_test_seq, _, _ = load_test_sequences(str(test_path))
 
     if args.smoke:
-        X_train = X_train.iloc[:80]
-        y_train = y_train.iloc[:80]
-        users = users.iloc[:80]
-        X_test = X_test.iloc[:40]
-        test_ids = test_ids.iloc[:40]
-        X_seq = X_seq[:80]
-        X_test_seq = X_test_seq[:40]
+        n_users = max(args.smoke_users, 3)
+        X_train, y_train, users, X_seq = smoke_slice_by_users(
+            X_train, y_train, users, X_seq=X_seq, n_users=n_users
+        )
+        n_test = 40
+        X_test = X_test.iloc[:n_test]
+        test_ids = test_ids.iloc[:n_test]
+        users_test = users_test.iloc[:n_test]
+        X_test_seq = X_test_seq[:n_test]
+        print(f"  Smoke: {n_users} train users, {len(X_train)} train rows, {n_test} test rows")
+
+    n_splits = 3 if args.smoke else 5
 
     X_train_t = combine_base_and_temporal_features(X_train, X_seq)
     X_test_t = combine_base_and_temporal_features(X_test, X_test_seq)
@@ -193,7 +214,7 @@ def main():
     }
 
     # ── Baseline V3 repro ───────────────────────────────────────────────────
-    print("\n=== Baseline: TabPFN V3 (grouped OOF, accuracy) ===")
+    print("\n=== Baseline: TabPFN V3 (grouped OOF, f1) ===")
     baseline_result = tabpfn_oof_predict(
         X_train_t,
         y_train,
@@ -204,8 +225,9 @@ def main():
         n_estimators=16,
         eval_metric="f1",
         model_version="V3",
+        n_splits=n_splits,
     )
-    baseline_preds = _load_baseline_preds(args.baseline_csv, test_ids)
+    baseline_preds = None if args.smoke else _load_baseline_preds(args.baseline_csv, test_ids)
     if baseline_preds is None:
         baseline_preds = baseline_result.test_preds
         print("  (no baseline CSV — using fresh V3 OOF-averaged test preds)")
@@ -256,6 +278,7 @@ def main():
             eval_metric="accuracy",
             model_version="V3",
             fit_mode="fit_with_cache",
+            n_splits=n_splits,
         )
         _run_candidate(
             "tabpfn_v3_cache_acc",
@@ -285,6 +308,7 @@ def main():
             eval_metric="accuracy",
             model_version="V3",
             mi_top_k=127,
+            n_splits=n_splits,
         )
         _run_candidate(
             "tabpfn_full_mi127_infold",
@@ -314,6 +338,7 @@ def main():
             eval_metric="accuracy",
             model_version="V3",
             tuning_config=tuning_config,
+            n_splits=n_splits,
         )
         _run_candidate(
             "tabpfn_v3_acc_tuned",
@@ -347,6 +372,7 @@ def main():
                 n_estimators=16,
                 eval_metric="accuracy",
                 model_version="V3",
+                n_splits=n_splits,
             )
             print(f"    seed={seed:3d}  OOF acc={result.oof_accuracy:.4f}")
             if result.oof_accuracy > best_oof:
@@ -381,6 +407,7 @@ def main():
             n_estimators=16,
             eval_metric="f1",
             model_version="V3",
+            n_splits=n_splits,
             X_seq=X_seq,
             X_test_seq=X_test_seq,
             users_test=users_test,
@@ -412,6 +439,7 @@ def main():
             n_estimators=32,
             eval_metric="accuracy",
             model_version="V3",
+            n_splits=n_splits,
         )
         _run_candidate(
             "tabpfn_v3_n32_acc",
