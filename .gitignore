@@ -1,4 +1,6 @@
 AGENTS.md
+docs/
+.worktrees/
 .ipynb_checkpoints
 */.ipynb_checkpoints/*
 *__pycache__/
