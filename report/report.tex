@@ -1,0 +1,621 @@
+\documentclass[12pt, a4paper]{article}
+
+% --- Packages ---
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{geometry}
+\geometry{top=2.5cm, bottom=2.5cm, left=3cm, right=2.5cm}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{cite}
+\usepackage{setspace}
+\usepackage{booktabs}
+\usepackage{CJKutf8}
+\usepackage{longtable}
+\usepackage{xcolor}
+\onehalfspacing
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    filecolor=magenta,
+    urlcolor=blue,
+    citecolor=blue,
+}
+
+% --- Document Identity ---
+\title{\textbf{Data Mining}\\ \large Assignment 3: Human Activity Recognition}
+\author{
+    Muhammad Rayhan Athaillah \begin{CJK*}{UTF8}{bsmi}(賴睿涵)\end{CJK*}\\
+    \small Student ID: 313540001\\
+    \small National Yang Ming Chiao Tung University
+}
+\date{June 2026}
+
+\begin{document}
+
+\maketitle
+
+\vspace{0.5cm}
+\noindent \textbf{GitHub Repository:} \href{https://github.com/RayhanHaqi/DM2026-Assignment-3}{https://github.com/RayhanHaqi/DM2026-Assignment-3}
+
+% ==========================================
+% 1. INTRODUCTION
+% ==========================================
+\section{Introduction}
+
+This report presents the complete experimental record and analysis for Assignment 3 of the Data Mining course: Human Activity Recognition (HAR) from wrist-worn accelerometer data. The task is a 6-class classification problem hosted on Kaggle (\texttt{nycu-data-mining-assignment-3}), evaluated by \textbf{accuracy} on a public leaderboard subset (private scores are revealed after the competition ends). The project spans three weeks of iterative experimentation across feature engineering, tree-based classifiers, deep sequence models, ROCKET-family transforms, ensemble blending, transformer-based TabPFN models, and post-hoc probability calibration. The \textbf{final public best accuracy is 0.7897}, achieved by TabPFN V3 with boost180 post-hoc calibration ($+0.0206$ over the XGBoost tree baseline at 0.7691, and $+0.0067$ over uncalibrated TabPFN V3 at 0.7830). The goal of 0.80 was not reached; follow-up micro-calibration and partner-model overrides regressed on the public leaderboard despite small grouped-OOF gains.
+
+\subsection{Dataset}
+
+The dataset consists of CSV files, each containing 300 consecutive accelerometer readings (timesteps) at six derived channels: \texttt{mean\_x}, \texttt{mean\_y}, \texttt{mean\_z}, \texttt{std\_x}, \texttt{std\_y}, and \texttt{std\_z}. Each file carries a single activity label from the set $\{0, 1, 2, 3, 4, 5\}$.
+
+\begin{table}[h]
+\centering
+\caption{Dataset summary.}
+\label{tab:dataset}
+\begin{tabular}{@{}lrr@{}}
+\toprule
+\textbf{Property} & \textbf{Train} & \textbf{Test} \\ \midrule
+Users & 60 & 40 \\
+CSV files & 11{,}020 & 6{,}849 \\
+Timesteps per file & 300 & 300 \\
+Channels per file & 6 & 6 \\ \bottomrule
+\end{tabular}
+\end{table}
+
+\noindent The training labels are heavily class-imbalanced:
+
+\begin{table}[h]
+\centering
+\caption{Training label distribution.}
+\label{tab:label_dist}
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+\textbf{Class} & \textbf{Count} & \textbf{Fraction} \\ \midrule
+0 & 4{,}643 & 42.1\% \\
+1 & 4{,}695 & 42.6\% \\
+2 & 358 & 3.2\% \\
+3 & 656 & 6.0\% \\
+4 & 142 & 1.3\% \\
+5 & 526 & 4.8\% \\ \bottomrule
+\end{tabular}
+\end{table}
+
+Classes 0 and 1 dominate (84.7\% combined), while classes 2, 4, and 5 are rare minorities. This imbalance drives key design decisions throughout the experimental pipeline.
+
+\subsection{Kaggle Constraints}
+
+The competition enforces a \textbf{3-submission-per-day} limit (per course specification) and uses \textbf{only 60 training users} for local validation. With no validation labels available for the 40 test users, every submission to the public leaderboard is costly. This constraint motivates rigorous local validation before any Kaggle upload.
+
+% ==========================================
+% 2. FEATURE ENGINEERING
+% ==========================================
+\section{Feature Engineering}
+
+Feature design was the single most impactful axis of variation. The project experimented with five distinct feature sets, ranging from compact aggregate statistics to high-dimensional time-series transforms.
+
+\subsection{42 Aggregate Statistics (Base)}
+
+Each CSV file's six channels are summarized by seven statistics: \texttt{mean}, \texttt{std}, \texttt{min}, \texttt{max}, \texttt{Q25}, \texttt{Q50}, and \texttt{Q75}, producing 42 features per file. This compact representation served as the foundation for all subsequent experiments.
+
+\begin{table}[h]
+\centering
+\caption{Feature set comparison (best score achieved with each set).}
+\label{tab:feature_sets}
+\begin{tabular}{@{}llcc@{}}
+\toprule
+\textbf{Feature set} & \textbf{Count} & \textbf{Best model} & \textbf{Score} \\ \midrule
+42 base & 42 & LightGBM (150 trials, SMOTE) & 0.7653 \\
+82 expanded & 82 & XGBoost & 0.7535 \\
+42 + targeted temporal & $\approx$58 & XGBoost (macro-F1, cv SMOTE, final no-SMOTE) & \textbf{0.7691} \\
+42 + rich temporal & $\approx$100+ & XGBoost & 0.7570 \\
+42 + targeted temporal + catch22 & $\approx$234 & XGBoost & 0.7524 \\ \bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{82-Feature Expanded Set (Failed)}
+
+Adding skewness, kurtosis, jerk, signal magnitude area, and channel correlations to the base 42 features expanded the set to 82 statistics. Both XGBoost (0.7535) and LightGBM (0.7453) \textit{degraded} compared to their 42-feature counterparts. This established an early rule: \textbf{broad, unvalidated feature expansion overfits}.
+
+\subsection{Targeted Temporal Features (Critical Improvement)}
+
+A compact set of temporal features was engineered directly from raw 300$\times$6 sequences (\texttt{model/temporal\_features.py}):
+
+\begin{itemize}
+    \item \textbf{Segment statistics:} Mean of each channel in the first, middle, and last third of the sequence (18 features).
+    \item \textbf{Segment deltas:} Last-minus-first mean difference per channel (6 features).
+    \item \textbf{Energy:} Mean squared amplitude per channel (6 features).
+    \item \textbf{Jerk:} Mean and standard deviation of first differences per channel (12 features).
+    \item \textbf{Magnitude:} Mean, std, min, max of the 3-axis resultant vector (4 features).
+    \item \textbf{Axis correlations:} Pearson correlation between \texttt{mean\_x}, \texttt{mean\_y}, \texttt{mean\_z} (3 features).
+\end{itemize}
+
+These features added approximately 49 variables to the 42 base features and produced the \textbf{tree-model best score of 0.7691} (later surpassed by TabPFN V3 calibration at 0.7897). Their success demonstrates that compact, physically interpretable temporal features generalize better than broad statistical dumps.
+
+\subsection{Rich Temporal Features (Failed)}
+
+An expanded temporal set including FFT spectral features, trend slopes, and multi-segment granularity was tested (\texttt{model/rich\_temporal\_features.py}). Pairing this set with XGBoost yielded 0.7570, and with ExtraTrees only 0.7175. The rich set likely captured user-specific artifacts that failed to transfer to unseen test users.
+
+\subsection{Sequence-Based Features (Research Path)}
+
+The current Research Path experiments evaluate time-series-native feature transforms as alternatives to hand-crafted temporal statistics:
+
+\begin{itemize}
+    \item \textbf{catch22:} 22 canonical time-series features per channel (176 features for 8 channels including magnitude axes). Compact, deterministic, and validated across 93 TSC benchmarks.
+    \item \textbf{MiniRocket (aeon):} A deterministic convolutional kernel transform producing approximately 20{,}000 features per sample, paired with Ridge classification.
+    \item \textbf{MultiRocket (aeon):} An extension adding differenced series and four pooling operators (PPV, MPV, MIPV, LSPV).
+\end{itemize}
+
+% ==========================================
+% 3. MODEL DEVELOPMENT
+% ==========================================
+\section{Model Development}
+
+\subsection{Tree-Based Classifiers}
+
+\begin{table}[h]
+\centering
+\caption{Best scores by model family on 42 + targeted temporal features.}
+\label{tab:models}
+\begin{tabular}{@{}llc@{}}
+\toprule
+\textbf{Model} & \textbf{Configuration} & \textbf{Score} \\ \midrule
+XGBoost & macro-F1 tuned, CV SMOTE, final no-SMOTE & \textbf{0.7691} \\
+XGBoost + CatBoost blend & 0.90/0.10 probability blend & 0.7690 \\
+CatBoost & no SMOTE, 500 iterations & 0.7648 \\
+LightGBM & macro-F1 tuned, CV SMOTE, final SMOTE & 0.7484 \\
+XGBoost seed ensemble & 5 seeds, final SMOTE & 0.7642 \\
+XGBoost DART & dropout trees & 0.7523 \\
+Random Forest & 200 trees & 0.7597 \\
+ExtraTrees & rich features & 0.7175 \\ \bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{XGBoost with Optuna tuning} emerged as the dominant tree model family. The best tree configuration uses \texttt{f1\_macro} as the tuning objective with SMOTE applied inside GroupKFold cross-validation, but \textbf{no SMOTE} in the final full-data fit. This asymmetry is critical: SMOTE helps the optimizer find better hyper-parameters under class-balanced CV folds, but synthesizing minority samples for the final model distorts the learned decision boundary when applied to the real, imbalanced test distribution.
+
+\textbf{CatBoost} is the strongest non-XGBoost model (0.7648), and its $0.90/0.10$ blend with XGBoost produced a near-tie at 0.7690, changing only 7 out of 6{,}849 test predictions relative to the best model.
+
+\subsection{Validation Methodology}
+
+All tree models were tuned with \texttt{Optuna} (TPESampler + MedianPruner) inside 5-fold \texttt{GroupKFold} partitioning by user. This prevents samples from the same user from leaking across train/validation folds, which is essential given the user-based structure of the HAR data.
+
+Key validation policies discovered during experimentation:
+
+\begin{itemize}
+    \item \textbf{SMOTE inside CV:} Applied within each fold before training. Improves Optuna's ability to find parameters that balance minority-class performance.
+    \item \textbf{No SMOTE in final fit:} Retraining on all training data without SMOTE consistently outperformed SMOTE-final variants (0.7691 vs 0.7642 for seed ensemble, 0.7691 vs 0.7484 for LightGBM).
+    \item \textbf{Repeated StratifiedGroupKFold:} A dedicated validation module (\texttt{model/validation.py}) was added to support repeated grouped cross-validation with multiple seeds, providing mean accuracy, standard deviation, worst-fold accuracy, and prediction distribution checks.
+\end{itemize}
+
+\subsection{Temporal and Label Alignment}
+
+Each CSV file is treated as one labeled sample: the activity label applies to the \textbf{entire 300-timestep window}, not to individual timesteps. Training and test rows are keyed by file \texttt{Id} in \texttt{sample\_submission.csv}; there is no per-timestep label to align. Temporal features (segment means, deltas, jerk, energy) are computed \textbf{within} each file's window so that every feature vector remains aligned with its single class label. Cross-validation uses \texttt{GroupKFold} by \texttt{user} so that all files from one wearer stay in the same fold, preventing user-level leakage across train and validation splits.
+
+\subsection{Sequence Models}
+
+\begin{table}[h]
+\centering
+\caption{Sequence model performance.}
+\label{tab:seq_models}
+\begin{tabular}{@{}llc@{}}
+\toprule
+\textbf{Model} & \textbf{Backbone} & \textbf{Score} \\ \midrule
+aeon MultiRocket + Ridge & 5{,}000 kernels & 0.7403 \\
+sktime MiniRocket + Ridge & default & 0.7128 \\
+aeon MiniRocket + Ridge & 10{,}000 kernels & 0.7128 \\
+Small 1D CNN & PyTorch & 0.6709 \\
+Custom ROCKET + Ridge & 1{,}024 kernels & 0.5742 \\ \bottomrule
+\end{tabular}
+\end{table}
+
+Standalone sequence models have not approached tree-model accuracy. The earlier \texttt{sktime} MiniRocket implementation (0.7128) was suspect because \texttt{sktime} documentation notes that its \texttt{MiniRocketMultivariate} may require identical fit/transform series counts for vanilla use. The Research Path replaces this with the \texttt{aeon} implementation, which supports multivariate collections of arbitrary size.
+
+The primary purpose of sequence models is not to replace XGBoost, but to \textbf{provide complementary signal} through conservative probability blending. The Research Path evaluates blend weights of 0.02, 0.05, 0.08, and 0.10 for aeon MiniRocket probabilities mixed into the current XGBoost targeted-temporal model.
+
+% ==========================================
+% 4. EXPERIMENT CHRONOLOGY
+% ==========================================
+\section{Experiment Chronology}
+
+\subsection{Phase 1: Baselines (May 16--18)}
+
+\begin{table}[h]
+\centering
+\caption{Early baseline results.}
+\label{tab:phase1}
+\begin{tabular}{@{}llc@{}}
+\toprule
+\textbf{Model} & \textbf{Config} & \textbf{Score} \\ \midrule
+LightGBM & 42 base, 50 trials, no SMOTE & 0.7645 \\
+RF & 42 base, sklearn default & 0.7597 \\
+XGBoost & 42 base, 50 trials, no SMOTE & 0.7358 \\
+Soft vote ensemble & XGB + LGB & 0.7587 \\
+LightGBM v2 & 82 expanded, 50 trials & 0.7453 \\
+XGBoost v2 & 82 expanded, 50 trials & 0.7535 \\ \bottomrule
+\end{tabular}
+\end{table}
+
+The 82-feature expansion degraded both models, establishing that compact features transfer better.
+
+\subsection{Phase 2: Optuna + SMOTE Tuning (May 18--20)}
+
+\begin{table}[h]
+\centering
+\caption{Optuna-tuned results (150 trials).}
+\label{tab:phase2}
+\begin{tabular}{@{}llc@{}}
+\toprule
+\textbf{Model} & \textbf{Config} & \textbf{Score} \\ \midrule
+LightGBM & 42 base, SMOTE inside CV & 0.7653 \\
+XGBoost (macro-F1) & 42 base, SMOTE inside CV & 0.7675 \\
+LightGBM (accuracy-tuned) & 42 base, SMOTE & 0.7572 \\
+LightGBM (accuracy-tuned) & 42 base, no SMOTE & 0.7515 \\ \bottomrule
+\end{tabular}
+\end{table}
+
+Switching from default parameters to Optuna-tuned hyper-parameters with SMOTE inside GroupKFold produced the first significant improvement. XGBoost surpassed LightGBM for the first time under macro-F1 tuning.
+
+\subsection{Phase 3: Feature Refinement (May 21)}
+
+\begin{table}[h]
+\centering
+\caption{Targeted temporal results.}
+\label{tab:phase3}
+\begin{tabular}{@{}lcl@{}}
+\toprule
+\textbf{Model/Features} & \textbf{Score} & \textbf{Note} \\ \midrule
+XGB + targeted temporal & \textbf{0.7691} & Tree best \\
+XGB (42 base, no temporal) & 0.7419 & Macro-F1 tuned, final no-SMOTE \\
+XGB + rich temporal & 0.7570 & Overfit \\
+ExtraTrees + rich temporal & 0.7175 & Not competitive \\
+OOF rich ensemble & 0.7388 & Weak components hurt \\ \bottomrule
+\end{tabular}
+\end{table}
+
+The targeted temporal features added 0.0272 over the 42-base baseline under the same XGBoost policy. Rich temporal features overfit despite higher dimensionality.
+
+\subsection{Phase 4: Ensemble and Calibration (May 22)}
+
+\begin{table}[h]
+\centering
+\caption{Post-targeted experiments.}
+\label{tab:phase4}
+\begin{tabular}{@{}lcl@{}}
+\toprule
+\textbf{Model} & \textbf{Score} & \textbf{Note} \\ \midrule
+XGB targeted seed ensemble & 0.7642 & Final SMOTE hurt \\
+XGB calibrated multipliers & 0.7596 & OOF F1 gain did not transfer \\
+LightGBM targeted temporal & 0.7484 & Poor transfer \\ \bottomrule
+\end{tabular}
+\end{table}
+
+This phase exposed the \textbf{danger of OOF macro-F1 overfit}. The calibrated model improved OOF F1 from 0.7100 to 0.7127 but dropped public accuracy by nearly 1 percentage point. Multiplier tuning overfits rare-class probability thresholds.
+
+\subsection{Phase 5: Model Diversity (May 24--25)}
+
+\begin{table}[h]
+\centering
+\caption{Alternate models and final refinement.}
+\label{tab:phase5}
+\begin{tabular}{@{}lcl@{}}
+\toprule
+\textbf{Model} & \textbf{Score} & \textbf{Note} \\ \midrule
+CatBoost targeted temporal & 0.7648 & Strong non-XGB model \\
+XGBoost DART & 0.7523 & DART did not help \\
+sktime MiniRocket & 0.7128 & Weak standalone \\
+XGB accuracy refit & 0.7514 & Local CV 0.878 but failed \\
+XGB seed ensemble (no SMOTE) & 0.7630 & Worse than SMOTE version \\
+XGB + CatBoost blend (0.90/0.10) & \textbf{0.7690} & 7 labels changed \\ \bottomrule
+\end{tabular}
+\end{table}
+
+The XGBoost + CatBoost blend at 0.90/0.10 produced the closest result to the current best (0.7690 vs 0.7691), changing only 7 test predictions. This demonstrates that small, conservative complementary-model blends can approach the single best model without significant distribution drift.
+
+\subsection{Phase 6: Research Path — Sequence Transforms (May 25--26)}
+
+The Research Path evaluated proper aeon ROCKET-family implementations and compact catch22 features. Results:
+
+\begin{table}[h]
+\centering
+\caption{Research Path sequence results.}
+\label{tab:phase6}
+\begin{tabular}{@{}lcl@{}}
+\toprule
+\textbf{Candidate} & \textbf{Score} & \textbf{Note} \\ \midrule
+aeon MiniRocket + Ridge (10K kernels) & 0.7128 & Below trees; not competitive \\
+aeon MultiRocket + Ridge (5K kernels) & 0.7403 & Better than MiniRocket, still below trees \\
+catch22 + XGBoost targeted temporal & 0.7524 & catch22 features hurt rather than helped \\
+XGB + MiniRocket blend (0.90/0.10) & Pending & 224 labels changed vs best \\ \bottomrule
+\end{tabular}
+\end{table}
+
+Standalone sequence models remain uncompetitive with tree-based approaches on this dataset. The catch22 features, when concatenated with targeted temporal features, degraded XGBoost performance from 0.7691 to 0.7524, confirming the pattern that broad feature expansion hurts generalization.
+
+\subsection{Phase 7: Improvement Candidates — Blend Optimization and Pseudo-Labeling (May 26--27)}
+
+This phase addressed two untapped optimization paths identified through careful codebase analysis: the XGB+CatBoost blend ratio had been hardcoded at 0.90/0.10 without any search, and pseudo-labeling existed in the codebase but had never been tested with the best feature set.
+
+\textbf{Candidate 1: Tuned CatBoost + Optimal Blend Ratio.} Previously, CatBoost used hardcoded default parameters (depth=6, learning\_rate=0.05) and the blend ratio was fixed at 0.10. The improvement adds an Optuna-tuned CatBoost path (\texttt{model/catboost\_train.py}) mirroring the XGBoost tuning infrastructure, then grid-searches blend ratios $\{0.00, 0.02, 0.05, 0.08, 0.10, 0.12, 0.15, 0.20, 0.25\}$ on GroupKFold OOF accuracy. The optimal ratio shifted from 0.10 to \textbf{0.20}, producing a 0.80/0.20 XGB/CatBoost blend with OOF accuracy of 0.8670. The prediction distribution changed 195 labels relative to the current best (0.7691), with a slight shift toward class 1 predictions.
+
+\textbf{Candidate 2: Pseudo-Labeling with Confidence Threshold 0.90.} The pseudo-labeling code from \texttt{run\_rich\_tabular\_ensemble.py} was adapted to use the best XGBoost targeted-temporal model. The process: (1) tune XGBoost on all 60 labeled users, (2) predict on the 40 test users, (3) select samples with maximum probability $\geq 0.90$ as pseudo-labels, (4) concatenate pseudo-labeled samples to training data, (5) retrain XGBoost on the augmented dataset without SMOTE. With threshold 0.90, 5{,}608 out of 6{,}849 test samples were added as pseudo-labels. The resulting prediction distribution was nearly identical to the current best (only 184 labels changed), suggesting that high-confidence predictions reinforce rather than alter the model's decision boundary.
+
+\begin{table}[h]
+\centering
+\caption{Improvement candidate results (Phase 7, now scored).}
+\label{tab:phase7}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{Candidate} & \textbf{Score} & \textbf{Diff vs Best} & \textbf{Verdict} \\ \midrule
+Current best (XGB targeted temporal) & \textbf{0.7691} & 0 & — \\
+Tuned XGB+CatBoost (0.80/0.20) & 0.7451 & 195 & Degraded: grid-searched ratio overfit OOF \\
+XGB pseudo-label (0.90) & 0.7402 & 184 & Degraded: pseudo-labels reinforced noise \\
+XGB + MiniRocket blend & 0.7623 & 224 & Degraded: sequence signal didn't transfer \\ \bottomrule
+\end{tabular}
+\end{table}
+
+All three Phase 7 candidates degraded public accuracy, following the consistent pattern of local validation overfit. The pseudo-labeling approach, despite selecting 5{,}608/6{,}849 test samples at 0.90 confidence, produced a prediction nearly identical to the best single model (only 184 label changes) but with worse accuracy. The grid-searched 0.80/0.20 blend ratio also overfit OOF accuracy at the expense of generalization.
+
+\subsection{Phase 8: Break-0.80 — TabPFN, Hjorth Features, and Robust Stacking (May 27)}
+
+With five days remaining and all incremental improvements exhausted, the final campaign (\texttt{--break-080}) targets a fundamentally different model architecture, compact new features, and a proper cross-validation overhaul.
+
+\textbf{Stream A: TabPFN + Stacking.} TabPFN is a pre-trained transformer foundation model for tabular data that performs in-context learning — it conditions on the entire training set via attention rather than building trees sequentially. This represents the first non-GBDT model class tested beyond the failed 1D CNN and ROCKET-family attempts. The stacking design generates GroupKFold OOF probabilities from XGBoost, CatBoost, LightGBM, and TabPFN, concatenating them as 24 meta-features alongside the original 91 features. A tuned XGBoost meta-learner combines all signals. TabPFN standalone (GPU-accelerated on RTX 5060 Ti) and the full stack are both submitted.
+
+\textbf{Stream B: Hjorth + Compact Spectral Features.} Classic HAR signal processing features are extracted from the raw 300-timestep sequences: Hjorth Mobility and Complexity (12 features, capturing signal frequency and stationarity) plus spectral centroid, flatness, rolloff, and bandwidth (24 features, capturing dominant frequency distribution). These 36 new features measure properties — mean frequency, bandwidth, spectral shape — that the existing time-domain statistics do not directly capture. Mutual information with class labels ranks all 127 features (91 original + 36 new), and only the top 100 are retained. The selected set is evaluated using an XGBoost model tuned with macro-F1.
+
+\textbf{Stream C: Cross-Validation Overhaul + Multi-Objective Ensemble.} The single GroupKFold-5 with fixed seed is replaced by RepeatedStratifiedGroupKFold (5 folds × 3 repeats = 15 splits) during Optuna tuning. Three separate XGBoost models are tuned for different objectives: f1\_macro (current best metric), accuracy (direct Kaggle optimization), and neg\_log\_loss (probability calibration). Their test probabilities are averaged to produce a consensus prediction that balances the tendencies of each objective.
+
+\begin{table}[h]
+\centering
+\caption{Break-0.80 candidate results (Phase 8, now scored).}
+\label{tab:phase8}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Candidate} & \textbf{Score} & \textbf{Verdict} \\ \midrule
+TabPFN standalone (n\_estimators=16) & \textbf{0.7823} & \textbf{NEW BEST} — transformer breakthrough \\
+TabPFN seed ensemble (5 seeds) & 0.7794 & Degraded: averaging diluted signal \\
+TabPFN 0.95 + XGB 0.05 blend & 0.7785 & Degraded: XGB signal harmful \\
+TabPFN 0.90 + XGB 0.10 blend & 0.7779 & Degraded: consistent pattern \\
+XGB + Hjorth/Spectral (MI selected) & 0.7484 & Feature expansion hurt \\
+XGB multi-obj ensemble & 0.7618 & Averaging diluted macro-F1 signal \\
+Stacking ensemble (XGB/CBT/LGB) & 0.7587 & OOF noise from base model re-tuning \\
+TabPFN + XGB + CBT/LGB stacking & 0.7533 & OOF stacking did not transfer \\ \bottomrule
+\end{tabular}
+\end{table}
+
+The Break-0.80 campaign produced one decisive breakthrough: \textbf{TabPFN standalone at 0.7823}, a $+0.0132$ improvement over the previous XGBoost best. This confirms that the transformer's in-context learning mechanism captures feature interactions that gradient-boosted trees systematically miss on this dataset. However, every attempt to improve upon TabPFN through blending, ensembling, or stacking degraded accuracy — the seed ensemble (averaging 5 TabPFN runs) scored 0.7794, and adding even a small XGB signal (5\%) dropped the score to 0.7785. TabPFN's single-run predictions appear near-optimal for this dataset.
+
+% ==========================================
+% 5. KEY FINDINGS
+% ==========================================
+\section{Key Findings}
+
+\subsection{Validation Transfer is the Dominant Constraint}
+
+The most consistent failure mode was not model capacity, but \textbf{local validation overfit}. Multiple candidates showed strong local CV or OOF signals that public accuracy subsequently punished:
+
+\begin{itemize}
+    \item XGBoost accuracy refit had local CV 0.878 but public 0.7514 ($-0.1266$ gap).
+    \item Calibrated multipliers improved OOF F1 but dropped public score ($-0.0095$ from baseline).
+    \item LightGBM targeted temporal had CV accuracy 0.8794 but public 0.7484 ($-0.1310$ gap).
+\end{itemize}
+
+Only 60 training users exist for 5-fold GroupKFold, making each validation run noisy. \textbf{Repeated grouped validation with StratifiedGroupKFold and prediction distribution checks} was introduced to mitigate this, but was not retroactively applied to earlier experiments.
+
+\subsection{Compact Features Transfer Better Than Broad Ones}
+
+Across all feature families, compact, physically motivated additions improved public score while broad statistical dumps hurt it:
+
+\begin{itemize}
+    \item Targeted temporal (+49 features): $+0.0272$ improvement.
+    \item Rich temporal ($\approx$100+ features): $-0.0121$ from best.
+    \item 82 expanded ($+40$ features): $-0.0110$ to $-0.0192$ from base.
+\end{itemize}
+
+\subsection{Final-Fit SMOTE is Perilous}
+
+The best model (0.7691) uses SMOTE during CV/tuning but \textbf{no SMOTE} in the final full-data fit. Every candidate that applied SMOTE in the final fit performed worse than its no-SMOTE counterpart under the same features. SMOTE is valuable for hyper-parameter search under class-balanced folds but should not be applied when training on the full, real, imbalanced dataset.
+
+\subsection{Macro-F1 Optimization Conflicts With Accuracy}
+
+The Kaggle metric is accuracy, yet many experiments optimized macro-F1 to balance minority classes. This produced:
+
+\begin{itemize}
+    \item Better local macro-F1 (calibration improved from 0.7100 to 0.7127).
+    \item Worse public accuracy (dropped from 0.7691 to 0.7596).
+    \item Inflated rare-class predictions (class 2 increased 60 $\rightarrow$ 167 in the calibrated model).
+\end{itemize}
+
+Macro-F1 as a tuning objective should be treated as a secondary signal; grouped accuracy should be the primary gate.
+
+\subsection{Conservative Blends Can Approach the Best}
+
+The 0.90 XGB / 0.10 CatBoost blend scored 0.7690, only 0.0001 below the best. It changed only 7 out of 6{,}849 test labels. This suggests that the margin between the current best and a small improvement may involve a similar micro-correction.
+
+\subsection{Prediction Distribution Drift Predicts Failure}
+
+Every failed candidate shifted rare-class predictions noticeably:
+
+\begin{table}[h]
+\centering
+\caption{Prediction distribution changes for failed candidates (current best: class 2 = 60, class 4 = 58, class 5 = 234).}
+\label{tab:distribution_drift}
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+\textbf{Candidate} & \textbf{Class 2} & \textbf{Class 4} & \textbf{Class 5} & \textbf{Score} \\ \midrule
+Current best & 60 & 58 & 234 & 0.7691 \\
+LGB targeted & 106 & 73 & 251 & 0.7484 \\
+XGB seed ensemble (SMOTE) & 136 & 79 & 262 & 0.7642 \\
+XGB calibrated & 167 & 80 & 266 & 0.7596 \\
+XGB rich temporal & 94 & 76 & 239 & 0.7570 \\
+CatBoost & 20 & 48 & 224 & 0.7648 \\ \bottomrule
+\end{tabular}
+\end{table}
+
+Candidates that inflated minority classes (2, 4, 5) without improving overall accuracy were consistently punished. CatBoost actually \textit{reduced} minority predictions, which may have limited its accuracy.
+
+\subsection{TabPFN Breakthrough — Transformer In-Context Learning Outperforms GBDTs}
+
+TabPFN (pre-trained transformer, $n_{\text{estimators}}=16$) scored \textbf{0.7823}, a $+0.0132$ improvement over XGBoost at 0.7691. TabPFN performs in-context learning: it conditions on the entire training set via a transformer's attention mechanism, rather than building decision trees sequentially. This fundamentally different approach to tabular classification captured feature interactions that 12 days of GBDT experimentation could not.
+
+Critically, TabPFN's advantage is \textbf{not} from ensembling or blending. Every attempt to combine TabPFN with other models degraded accuracy:
+
+\begin{table}[h]
+\centering
+\caption{TabPFN blending results (all worse than standalone 0.7823).}
+\label{tab:tabpfn_blend}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Approach} & \textbf{Score} & \textbf{$\Delta$} \\ \midrule
+TabPFN standalone & 0.7823 & — \\
+TabPFN seed ensemble (5 seeds) & 0.7794 & $-0.0029$ \\
+TabPFN 0.95 + XGB 0.05 & 0.7785 & $-0.0038$ \\
+TabPFN 0.90 + XGB 0.10 & 0.7779 & $-0.0044$ \\
+XGB + CatBoost 0.90/0.10 & 0.7690 & $-0.0133$ \\
+XGBoost standalone & 0.7691 & $-0.0132$ \\ \bottomrule
+\end{tabular}
+\end{table}
+
+The seed ensemble degradation (0.7794 vs 0.7823) indicates that seed=42 happened to produce a favorable initialization. The blending degradation (0.7785--0.7779 with XGB) confirms that XGBoost's predictions are worse than TabPFN's on every sample where they disagree, making XGB a harmful addition to the blend.
+
+% ==========================================
+% 6. RESEARCH PATH — ONGOING
+% ==========================================
+\section{Research Path — Results and Additions}
+
+\subsection{Sequence Transform Results}
+
+The Research Path (\texttt{--research-20260525}) produced four candidates, all now scored. None surpassed the tree-based baseline:
+
+\begin{table}[h]
+\centering
+\caption{Research Path Kaggle results.}
+\label{tab:research_results}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Candidate} & \textbf{Score} & \textbf{Verdict} \\ \midrule
+aeon MiniRocket + Ridge (10K kernels) & 0.7128 & Not competitive \\
+aeon MultiRocket + Ridge (5K kernels) & 0.7403 & Best sequence model, below trees \\
+catch22 + XGBoost & 0.7524 & Feature expansion hurt \\
+XGB + MiniRocket blend (0.90/0.10) & 0.7623 & Marginal improvement over MiniRocket alone \\ \bottomrule
+\end{tabular}
+\end{table}
+
+The conclusion is clear: \textbf{raw sequence transforms do not independently outperform hand-crafted temporal features} on this dataset. The 42 base + 49 targeted temporal features remain the optimal representation.
+
+\subsection{Phase 9: TabPFN Version and Configuration (May 30--June 1)}
+
+TabPFN model version V3 (\texttt{n\_estimators=16}, \texttt{eval\_metric=f1}, seed 42) scored \textbf{0.7830} on the public leaderboard, improving over V2\_6 at 0.7823. Most tuning\_config, seed-search, and extended-feature TabPFN variants scored below V3 (e.g., MI-127 at 0.7726 despite OOF 0.8919). This reinforced that compact 91-feature inputs and a single strong TabPFN configuration generalize better than broad feature expansion on 60 training users.
+
+\subsection{Phase 10: Post-Hoc Probability Calibration (June 5--10)}
+
+The largest public gain after TabPFN V3 came from \textbf{cache-only post-hoc calibration} on grouped-OOF TabPFN probabilities (\texttt{model/v3\_probability.py}). Class-prior multipliers and temperature scaling adjust rare-class predictions without retraining TabPFN.
+
+\begin{table}[h]
+\centering
+\caption{Calibration and follow-up results (June 2026).}
+\label{tab:calibration}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Candidate} & \textbf{Public} & \textbf{Verdict} \\ \midrule
+boost180 full calibration & 0.7883 & $+0.0053$ vs V3; fixed class-2 under-prediction \\
+Finetune cut1=0.92 (boost180 family) & \textbf{0.7897} & \textbf{Final best} ($+0.0014$ vs 0.7883) \\
+Phase 1 micro-cal near anchor & 0.7883 & Regression ($-0.0014$) \\
+Phase 2 low-conf XGB override & 0.7880 & Regression ($-0.0017$) \\
+TabPFN + XGB prob blend (58/42) & 0.7794 & OOF gain, public $-0.0099$ vs boost180 \\
+break080 coarse cal (cut1=0.88) & 0.7857--0.7858 & Regression ($-0.0040$) \\ \bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Final recipe (public 0.7897):} TabPFN V3 on 91 targeted-temporal features; cached probabilities in \texttt{output/prob\_cache/tabpfn\_v3\_91f1.npz}; class multipliers $[0.80, 0.92, 1.80, 1.0, 1.80, 1.80]$; temperature $0.58$. Submission file: \texttt{submission\_tabpfn\_v3\_cal\_ft\_c08\_c1092\_b18\_t058\_20260609\_094157\_01.csv}.
+
+Grouped OOF accuracy ($\approx$0.886) consistently overestimated small public gains: micro-calibration and surgical XGB overrides improved OOF by $\leq$0.0005 yet regressed publicly. The calibration grid around 0.7897 collapsed to only 9 unique prediction hashes across 81 parameter combinations, indicating a hard plateau for threshold-only tuning on the same probability cache.
+
+\subsection{Codebase Improvements}
+
+Two new capabilities were added to the experimental infrastructure:
+
+\begin{itemize}
+    \item \texttt{model/catboost\_train.py}: \texttt{tune\_catboost()} function using Optuna (TPESampler + MedianPruner) with GroupKFold-5, SMOTE support, and six tuned hyper-parameters (iterations, depth, learning rate, L2 regularization, bagging temperature, random strength).
+    \item \texttt{scripts/run\_balanced\_candidates.py} -- \texttt{--improve-20260527}: New experiment mode dispatching the tuned XGB+CatBoost blend (with OOF grid-searched ratio) and the XGB pseudo-labeling candidate.
+    \item \texttt{model/hjorth\_features.py}: Hjorth Mobility and Complexity parameters plus spectral centroid, flatness, rolloff, and bandwidth per channel — 36 compact frequency-domain features computed from raw 300-timestep sequences.
+    \item \texttt{model/tabpfn\_model.py}: TabPFN classifier wrapper with GroupKFold out-of-fold support, GPU-accelerated on RTX 5060 Ti, and graceful fallback when the TABPFN\_TOKEN environment variable is not set.
+    \item \texttt{model/train.py}: Extended \texttt{tune\_xgboost()} and \texttt{tune\_lightgbm()} with RepeatedStratifiedGroupKFold support (\texttt{n\_repeats} parameter) and \texttt{neg\_log\_loss} as a third tuning objective alongside f1\_macro and accuracy.
+    \item \texttt{scripts/run\_balanced\_candidates.py} -- \texttt{--break-080}: Final experiment mode dispatching four candidates: Hjorth/Spectral feature XGB, multi-objective ensemble, TabPFN standalone, and full stacking ensemble. All candidates feed into the standard \texttt{generate\_submission()} pipeline with automatic SUBMISSIONS.md tracking.
+    \item \texttt{scripts/run\_tabpfn\_stack.py}: Standalone TabPFN stacking pipeline generating seed ensembles, fast variants (different $n_{\text{estimators}}$ and eval\_metrics), OOF stacking with XGB/CBT/LGB, and conservative blends. Contains class alignment logic for CatBoost and LightGBM probability matrices.
+    \item \texttt{scripts/run\_tabpfn\_blend.py}: Fast TabPFN + XGB blend script generating four blend ratios (0.95/0.05, 0.90/0.10, 0.85/0.15, 0.80/0.20) from TabPFN seed ensemble and XGB test probabilities.
+    \item \texttt{scripts/run\_tabpfn\_v2.py}: Comprehensive TabPFN exploration script running four experiments: tuning\_config + eval\_metric grid (8 variants), seed search via OOF (20 seeds), feature set experiments (3 variants), and TabPFN finetuning (2 variants). Addresses the critical oversight of missing \texttt{tuning\_config} in the original TabPFN submission.
+\end{itemize}
+
+% ==========================================
+% 7. CONCLUSION
+% ==========================================
+\section{Conclusion}
+
+After $\sim$145 Kaggle submissions, the final public best accuracy is \textbf{0.7897}, achieved by TabPFN V3 with boost180 post-hoc calibration. The improvement path was: XGBoost targeted temporal (0.7691) $\rightarrow$ TabPFN breakthrough (0.7823) $\rightarrow$ TabPFN V3 (0.7830) $\rightarrow$ calibration (0.7883) $\rightarrow$ finetuned cut1=0.92 (0.7897). The 0.80 target was not reached (+1.03 percentage points short).
+
+Post-best experiments (micro-calibration, low-confidence XGB overrides, probability blends, coarse re-calibration on the same cache) all regressed publicly despite passing local gates. The dominant lesson is that \textbf{grouped OOF on 60 users is a poor proxy for 40 held-out test users}: OOF runs $\sim$10 points above public score, and sub-0.001 OOF improvements are noise.
+
+\textbf{Ablation summary (core design choices):}
+\begin{itemize}
+    \item Targeted temporal features: $+0.0272$ (42 $\rightarrow$ 91 features, tree path).
+    \item TabPFN vs XGB: $+0.0132$ to $+0.0146$ (architecture change).
+    \item Post-hoc calibration: $+0.0053$ then $+0.0014$ (rare-class prior correction).
+    \item Blends / extended features / sequence models: consistently negative or flat.
+\end{itemize}
+
+The key lessons are transferable to small-user-count HAR problems:
+
+\begin{enumerate}
+    \item \textbf{Prioritize grouped accuracy and public transfer over macro-F1/OOF} when the metric is accuracy.
+    \item \textbf{Compact, physically motivated features generalize;} broad dumps and spectral expansions inflated OOF but hurt public scores.
+    \item \textbf{Separate CV SMOTE from final-fit SMOTE;} final no-SMOTE was critical for the tree best.
+    \item \textbf{Weaker partner models harm TabPFN;} every XGB blend/override degraded accuracy.
+    \item \textbf{Post-hoc calibration can fix systematic rare-class bias} when it changes many low-confidence decisions coherently (class 2: 42 $\rightarrow$ 108 at boost180).
+    \item \textbf{Threshold tuning on a fixed probability cache plateaus quickly;} new probability mass requires retraining or finetuning, not more grid search.
+\end{enumerate}
+
+% ==========================================
+% 8. REPRODUCIBILITY AND SUBMISSION
+% ==========================================
+\section{Reproducibility and Submission Checklist}
+
+\subsection{How to Run the Code}
+
+\begin{enumerate}
+    \item Install dependencies: \texttt{pip install -e .} (downloads Kaggle data; requires \texttt{tabpfn} for TabPFN experiments).
+    \item Execute the analysis notebook: \texttt{jupyter nbconvert --to notebook --execute --inplace HAR\_Analysis.ipynb}
+    \item One-time GPU step to cache TabPFN V3 probabilities:
+    \begin{verbatim}
+PYTHONPATH=. python scripts/cache_tabpfn_v3_probs.py \
+  --output-path output/prob_cache/tabpfn_v3_91f1.npz --device cuda
+    \end{verbatim}
+    \item Regenerate/rank calibrated predictions (no Kaggle upload):
+    \begin{verbatim}
+PYTHONPATH=. python scripts/rank_finetune_cuts.py --phase1 --top 25 --write-top 0
+    \end{verbatim}
+\end{enumerate}
+
+\subsection{Final Kaggle Submission}
+
+\begin{itemize}
+    \item \textbf{File:} \texttt{submission\_tabpfn\_v3\_cal\_ft\_c08\_c1092\_b18\_t058\_20260609\_094157\_01.csv}
+    \item \textbf{Public score:} 0.7897
+    \item \textbf{Kaggle display name:} must be Student ID \textbf{313540001}
+    \item \textbf{Competition:} \texttt{nycu-data-mining-assignment-3}
+\end{itemize}
+
+\subsection{Assignment Deliverables}
+
+\begin{itemize}
+    \item Public GitHub repository (link above).
+    \item This report PDF submitted to E3 as \texttt{DM\_asg3\_313540001.pdf}.
+    \item Kaggle CSV with correct Id/Label format (6849 rows).
+\end{itemize}
+
+\vspace{0.5cm}
+\noindent \textit{Final best submission: \texttt{submission\_tabpfn\_v3\_cal\_ft\_c08\_c1092\_b18\_t058\_20260609\_094157\_01.csv} (public 0.7897). Full experiment log: \texttt{output/SUBMISSIONS.md}.}
+
+\end{document}

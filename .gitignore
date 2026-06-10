@@ -4,7 +4,8 @@ AGENTS.md
 *__pycache__/
 *.vscode/
 *.venv/
-/report
+/report/*
+!/report/report.tex
 *.pdf
 *.pptx
 *.pptx.txt

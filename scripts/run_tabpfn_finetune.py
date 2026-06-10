@@ -15,7 +15,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from model.submission_audit import gate_submission
+from model.submission_audit import gate_submission, load_labels, resolve_class2_range
 from model.sequence import load_test_sequences, load_train_sequences
 from model.tabpfn_model import (
     finetuned_grouped_oof,
@@ -33,7 +33,9 @@ from model.validation import (
 )
 
 VALID_LABELS = {0, 1, 2, 3, 4, 5}
-DEFAULT_BASELINE = ROOT / "output" / "submission_tabpfn_v3_20260601_180045_01.csv"
+DEFAULT_BASELINE = (
+    ROOT / "output" / "submission_tabpfn_v3_cal_ft_c08_c1092_b18_t058_20260609_094157_01.csv"
+)
 DEFAULT_TRACKER = ROOT / "output" / "SUBMISSIONS.md"
 EXPECTED_TEST_ROWS = 6849
 
@@ -106,7 +108,13 @@ def main():
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--baseline-csv", default=str(DEFAULT_BASELINE))
     parser.add_argument("--tracker", default=str(DEFAULT_TRACKER))
-    parser.add_argument("--best-score", type=float, default=0.7830)
+    parser.add_argument("--best-score", type=float, default=0.7897)
+    parser.add_argument(
+        "--finetune-metric",
+        choices=("log_loss", "roc_auc"),
+        default="log_loss",
+        help="TabPFN finetune early-stopping metric",
+    )
     parser.add_argument("--min-oof-margin", type=float, default=0.002)
     parser.add_argument("--min-shift-pct", type=float, default=2.0)
     parser.add_argument("--smoke", action="store_true")
@@ -181,7 +189,9 @@ def main():
     print(f"  V3 worst-fold: {min(baseline_fold_accs):.4f}")
     print(f"  Required OOF for proceed/submit: {required_oof:.4f}")
 
-    cfg = FINETUNE_CONFIG
+    cfg = dict(FINETUNE_CONFIG)
+    cfg["finetune_eval_metric"] = args.finetune_metric
+    cfg["name"] = f"tabpfn_ft_{args.finetune_metric}_30e"
     print(f"\n=== Finetuning OOF: {cfg['name']} (early-stop={cfg['finetune_eval_metric']}) ===")
     ft_result = finetuned_grouped_oof(
         X_train_t, y_train, users, cfg, args.device, n_splits=n_splits
